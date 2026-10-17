@@ -1,6 +1,8 @@
 import { assemble, stepForward, stepBackward, runForward, runBackward, newState, cloneState, statesEqual, newBaselineState, gateXOR, gateNOT, gateSWAP, gateADD, gateCADD, } from './index.js';
 /* ---------- DOM elements ---------- */
 const asmEl = document.getElementById('asm');
+const demoSelectEl = document.getElementById('demo-select');
+const demoNoteEl = document.getElementById('demo-note');
 const progEl = document.getElementById('prog');
 const asmErrorsEl = document.getElementById('asm-errors');
 const regsBodyEl = document.getElementById('regs-body');
@@ -17,8 +19,8 @@ const scrubValEl = document.getElementById('scrub-val');
 const stepsEl = document.getElementById('steps');
 const logBytesEl = document.getElementById('logbytes');
 const flip16LogEl = document.getElementById('flip16log');
+const energyStepsEl = document.getElementById('energy-steps');
 const erasedEl = document.getElementById('erased');
-const tempEl = document.getElementById('temp');
 const energyEl = document.getElementById('energy');
 const selInstrEl = document.getElementById('sel-instr');
 const selInverseEl = document.getElementById('sel-inverse');
@@ -32,12 +34,40 @@ const gToffoliEl = document.getElementById('g-toffoli');
 const gFredkinEl = document.getElementById('g-fredkin');
 const gAncillaEl = document.getElementById('g-ancilla');
 const gNoteEl = document.getElementById('g-note');
-/* ---------- Application state ---------- */
+const DEMOS = {
+    fibonacci: {
+        source: `; Seed: r1 = 0, r2 = 1. Each pair is (F(n), F(n+1)).
+REPEAT 8 {
+  ADD  r1, r2
+  SWAP r1, r2
+}`,
+        note: 'Starts at r1 = 0 and r2 = 1. Step forward to watch consecutive Fibonacci values move through r1 and r2.',
+        initialize: () => {
+            const s = newState();
+            s.regs[1] = 0;
+            s.regs[2] = 1;
+            return s;
+        },
+    },
+    copy: {
+        source: `; Seed: r1 = 42, r2 = 0. Copy into clean storage, then erase the copy.
+XOR r2, r1
+XOR r2, r1`,
+        note: 'Starts at r1 = 42 and r2 = 0. The first XOR creates a reversible copy; the second uncomputes it back to zero.',
+        initialize: () => {
+            const s = newState();
+            s.regs[1] = 42;
+            return s;
+        },
+    },
+};
+let activeDemo = 'fibonacci';
 let program = [];
-let state = newState();
+let state = initialState();
 let baseline = newBaselineState();
 let steps = 0;
 let direction = 'forward'; // 'forward' | 'backward'
+let changedRegisters = new Set();
 const MEM_WATCH_ADDRS = [0x0000, 0x0010, 0x00ff, 0xffff];
 /* ---------- Initialization ---------- */
 function init() {
@@ -46,12 +76,34 @@ function init() {
     renderTimeline();
     updateEnergy();
     updateGateDisplay(null);
-    asmEl.addEventListener('input', assembleAndRender);
+    asmEl.addEventListener('input', () => {
+        activeDemo = 'custom';
+        demoSelectEl.value = 'custom';
+        demoNoteEl.textContent = 'Custom programs begin from an all-zero state. Use the Reset control to return to that state.';
+        resetMachine();
+        assembleAndRender();
+        updateEnergy();
+        updateGateDisplay(null);
+    });
+    demoSelectEl.addEventListener('change', () => {
+        const selected = demoSelectEl.value;
+        if (selected === 'custom') {
+            activeDemo = 'custom';
+            demoNoteEl.textContent = 'Custom programs begin from an all-zero state. Use the Reset control to return to that state.';
+        }
+        else {
+            activeDemo = selected;
+            const demo = DEMOS[selected];
+            asmEl.value = demo.source;
+            demoNoteEl.textContent = demo.note;
+        }
+        resetMachine();
+        assembleAndRender();
+        updateEnergy();
+        updateGateDisplay(null);
+    });
     btnReset.addEventListener('click', () => {
-        state = newState();
-        baseline = newBaselineState();
-        steps = 0;
-        direction = 'forward';
+        resetMachine();
         assembleAndRender();
         renderState();
         renderTimeline();
@@ -66,7 +118,25 @@ function init() {
     // Replaying from the entry state makes every selected PC boundary deterministic.
     scrubEl.addEventListener('input', applyScrub);
     btnRoundtrip.addEventListener('click', () => runRoundtripTest());
-    tempEl.addEventListener('input', updateEnergy);
+}
+function initialState() {
+    if (activeDemo === 'custom')
+        return newState();
+    return DEMOS[activeDemo].initialize();
+}
+function resetMachine() {
+    state = initialState();
+    baseline = newBaselineState();
+    steps = 0;
+    direction = 'forward';
+    changedRegisters.clear();
+}
+function markChangedRegisters(before) {
+    changedRegisters = new Set();
+    for (let r = 0; r < state.regs.length; r++) {
+        if (before[r] !== state.regs[r])
+            changedRegisters.add(r);
+    }
 }
 /* ---------- Assembler ---------- */
 function assembleAndRender() {
@@ -134,12 +204,14 @@ function stepOne(dir) {
     if (program.length === 0)
         return;
     try {
+        const before = new Uint16Array(state.regs);
         if (dir === 'forward') {
             stepForward(state, program);
         }
         else {
             stepBackward(state, program);
         }
+        markChangedRegisters(before);
         steps += 1;
         direction = dir;
         renderState();
@@ -156,12 +228,14 @@ function run(dir) {
     if (program.length === 0)
         return;
     try {
+        const before = new Uint16Array(state.regs);
         if (dir === 'forward') {
             runForward(state, program);
         }
         else {
             runBackward(state, program);
         }
+        markChangedRegisters(before);
         direction = dir;
         steps = 0; // steps not meaningful for a full run in this simple counter
         renderState();
@@ -177,13 +251,16 @@ function applyScrub() {
     const target = Number(scrubEl.value);
     scrubValEl.textContent = String(target);
     // Reset to entry and replay forward to the target boundary.
-    state = newState();
+    state = initialState();
     baseline = newBaselineState();
     steps = target;
     direction = 'forward';
+    changedRegisters.clear();
     try {
         for (let i = 0; i < target && i < program.length; i++) {
+            const before = new Uint16Array(state.regs);
             stepForward(state, program);
+            markChangedRegisters(before);
         }
     }
     catch (e) {
@@ -205,7 +282,7 @@ function renderState() {
     regsBodyEl.innerHTML = '';
     for (let r = 0; r < 8; r++) {
         const row = document.createElement('tr');
-        row.className = state.pc === r ? 'pc' : '';
+        row.className = changedRegisters.has(r) ? 'changed' : '';
         const val = Number(state.regs[r]);
         row.innerHTML = `
       <td class="name">r${r}</td>
@@ -322,15 +399,19 @@ function runRoundtripTest() {
     }
 }
 function updateEnergy() {
-    const bits = steps; // rough proxy: one write per step
-    const T = Number(tempEl.value) || 300;
+    // This comparison is tied to the current program position, rather than to
+    // UI clicks. It stays meaningful after running backward or using the slider.
+    const executedInstructions = state.pc;
+    const bits = executedInstructions * 16;
+    const T = 300;
     const k = 1.380649e-23;
     const ln2 = 0.69314718056;
     const joulesPerBit = k * T * ln2;
     const total = bits * joulesPerBit;
-    erasedEl.textContent = String(bits);
+    energyStepsEl.textContent = String(executedInstructions);
+    erasedEl.textContent = `${bits} bits`;
     energyEl.textContent = bits === 0
-        ? '0 J (no bits erased yet)'
+        ? '0 J'
         : total.toExponential(3) + ' J';
 }
 /* ---------- Start ---------- */

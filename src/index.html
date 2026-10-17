@@ -20,15 +20,16 @@
       --pc: #fbbf24;
     }
     * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+    html { min-height: 100%; background: var(--bg); }
+    body { min-height: 100vh; margin: 0; background: var(--bg); color: var(--text);
       font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-    body { display: grid; grid-template-rows: auto 1fr auto; gap: 0; }
+    body { display: grid; grid-template-rows: auto auto auto; gap: 0; }
     header { background: var(--panel); border-bottom: 1px solid var(--border);
       padding: 1rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
     h1 { font-size: 1.05rem; letter-spacing: 0.06em; margin: 0; display: flex; align-items: center; gap: 0.5rem; }
     .tag { font-size: 0.72rem; padding: 0.12em 0.5em; border: 1px solid var(--accent);
       color: var(--accent); border-radius: 0.35em; letter-spacing: 0.05em; }
-    main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.42fr); gap: 1.5rem; padding: 1rem 1.5rem; overflow: hidden; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.42fr); gap: 1.5rem; padding: 1rem 1.5rem; align-content: start; }
     footer { background: var(--panel); border-top: 1px solid var(--border);
       padding: 0.75rem 1.5rem; font-size: 0.78rem; color: var(--muted); }
 
@@ -69,8 +70,10 @@
     table.regs th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
     table.regs td.name { width: 3rem; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; }
     table.regs td.dec { font-size: 1rem; font-weight: 600; color: var(--text); width: 12rem; }
-    table.regs tr.pc td.name { color: var(--pc); font-weight: 700; }
-    table.regs tr.pc td.dec { color: var(--pc); }
+    table.regs tr.changed td { background: rgba(251, 191, 36, 0.14); }
+    table.regs tr.changed td:first-child { box-shadow: inset 3px 0 0 var(--pc); }
+    table.regs tr.changed td.name { color: var(--pc); font-weight: 700; }
+    table.regs tr.changed td.dec { color: #fde68a; }
 
     .pc-line { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.82rem; color: var(--muted); }
     .pc-line b { color: var(--text); }
@@ -125,12 +128,21 @@
       <h2><span class="dot"></span>Program</h2>
       <div class="toolbar">
         <label for="asm">Source (one instruction per line)</label>
+        <label for="demo-select" style="margin-left:auto;">Demo</label>
+        <select id="demo-select" aria-label="Choose a demo">
+          <option value="fibonacci">Fibonacci sequence</option>
+          <option value="copy">Copy and uncompute</option>
+          <option value="custom">Custom program</option>
+        </select>
       </div>
-      <textarea id="asm" spellcheck="false">; Fibonacci: (r1, r2) = (F(n), F(n+1)) -> (F(n+1), F(n+2))
+      <textarea id="asm" spellcheck="false">; Seed: r1 = 0, r2 = 1. Each pair is (F(n), F(n+1)).
 REPEAT 8 {
-  ADD  r2, r1
+  ADD  r1, r2
   SWAP r1, r2
 }</textarea>
+      <div id="demo-note" style="margin-top:0.45rem;font-size:0.78rem;color:var(--muted);">
+        Starts at r1 = 0 and r2 = 1. Step forward to watch consecutive Fibonacci values move through r1 and r2.
+      </div>
       <div class="prog" id="prog"></div>
       <div id="asm-errors" class="errors"></div>
     </div>
@@ -205,18 +217,19 @@ REPEAT 8 {
     </div>
 
     <div class="card">
-      <h2><span class="dot"></span>Energy (theoretical)</h2>
+      <h2><span class="dot"></span>Information-loss comparison</h2>
       <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.4rem;">
-        Landauer lower bound only — not measured device energy.
+        A conventional machine overwrites state. Flip-16 transforms it so it can be recovered.
       </div>
       <div style="font-size:0.82rem;">
-        <div>Erased bits (baseline): <b id="erased">0</b></div>
-        <div>Temperature T: <input id="temp" type="number" value="300" style="width:4rem;" /> K</div>
-        <div>Minimum energy: <b id="energy">0 J</b> per erased bit basis</div>
+        <div>At this execution position: <b id="energy-steps">0</b> instructions</div>
+        <div style="margin-top:0.35rem;">Conventional baseline: <b id="erased">0 bits</b> of information overwritten</div>
+        <div>Flip-16 model: <b style="color:var(--ok);">0 intentional bit erasures</b></div>
+        <div style="margin-top:0.6rem;">Theoretical minimum heat avoided: <b id="energy">0 J</b></div>
       </div>
       <div style="margin-top:0.5rem;font-size:0.74rem;color:var(--muted);">
-        Flip-16 erases 0 intentionally erased architectural bits in this model.<br>
-        Display: erasedBits &times; k &times; T &times; ln(2). At 300 K &asymp; 2.87&times;10<sup>-21</sup> J/bit.
+        This is a teaching comparison at 300 K: one destructive 16-bit write per executed instruction.<br>
+        It is Landauer's theoretical lower bound, not a measurement of this browser or computer's electricity use.
       </div>
     </div>
   </aside>
