@@ -108,6 +108,9 @@ export function assemble(source: string, options: AsmOptions = {}): AsmResult {
           expanded.push(item);
         }
       }
+      // Skip the closing brace consumed by the block scanner. Without this,
+      // the outer loop parses it again as an unmatched `}`.
+      i += 1;
     } else if (/^\s*\}\s*$/i.test(trimmed)) {
       errors.push({ line: lineNo, instruction: trimmed, reason: 'unexpected closing brace outside REPEAT' });
       i += 1;
@@ -173,9 +176,15 @@ function parseLine(
   body = body.slice(0, cut).trim();
   if (body === '') return { instr: null, error: null };
 
-  const tokens = body.split(/\s+/);
-  const op = tokens[0].toUpperCase() as Op;
-  const args = tokens.slice(1);
+  const opMatch = /^(\S+)(?:\s+(.*))?$/.exec(body);
+  if (!opMatch) return { instr: null, error: null };
+  const op = opMatch[1].toUpperCase() as Op;
+  // Operands are comma-separated. Splitting only on whitespace left commas
+  // attached to register names (for example `r2,`), causing valid programs
+  // to be rejected as invalid registers.
+  const args = opMatch[2] === undefined || opMatch[2].trim() === ''
+    ? []
+    : opMatch[2].split(',').map((arg) => arg.trim());
 
   const fail = (reason: string): ParseFail => ({ instr: null, error: { line, instruction: text, reason } });
 
