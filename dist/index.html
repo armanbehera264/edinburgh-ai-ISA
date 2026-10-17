@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flip-16 — Reversible 16-bit ISA Emulator</title>
+  <style>
+    :root {
+      --bg: #0b0e14;
+      --panel: #131a26;
+      --panel-2: #0f1420;
+      --text: #e8eef7;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-2: #818cf8;
+      --ok: #22c55e;
+      --bad: #ef4444;
+      --warn: #f59e0b;
+      --border: #1f2a3a;
+      --pc: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: var(--bg); color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { display: grid; grid-template-rows: auto 1fr auto; gap: 0; }
+    header { background: var(--panel); border-bottom: 1px solid var(--border);
+      padding: 1rem 1.5rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    h1 { font-size: 1.05rem; letter-spacing: 0.06em; margin: 0; display: flex; align-items: center; gap: 0.5rem; }
+    .tag { font-size: 0.72rem; padding: 0.12em 0.5em; border: 1px solid var(--accent);
+      color: var(--accent); border-radius: 0.35em; letter-spacing: 0.05em; }
+    main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.42fr); gap: 1.5rem; padding: 1rem 1.5rem; overflow: hidden; }
+    footer { background: var(--panel); border-top: 1px solid var(--border);
+      padding: 0.75rem 1.5rem; font-size: 0.78rem; color: var(--muted); }
+
+    .content-column, .sidebar { min-width: 0; }
+    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+      .grid3 { grid-template-columns: 1fr; }
+    }
+
+    .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 0.5rem;
+      padding: 1rem; margin-bottom: 1rem; }
+    .card h2 { font-size: 0.82rem; margin: 0 0 0.75rem 0; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--muted); display: flex; align-items: center; gap: 0.4rem; }
+    .card h2 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+
+    label { font-size: 0.8rem; color: var(--muted); display: block; margin-bottom: 0.35rem; }
+    input[type=text], textarea, select {
+      width: 100%; background: #0b1018; border: 1px solid var(--border); color: var(--text);
+      border-radius: 0.35rem; padding: 0.45rem 0.6rem; font-size: 0.85rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    textarea { min-height: 14rem; resize: vertical; }
+    button {
+      background: var(--panel); border: 1px solid var(--border); color: var(--text);
+      border-radius: 0.35rem; padding: 0.5rem 0.9rem; font-size: 0.85rem; cursor: pointer;
+    }
+    button:hover { border-color: var(--accent-2); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--border); }
+    button.primary { background: var(--accent); color: #021622; border-color: var(--accent); font-weight: 600; }
+    button.primary:hover { background: #7dd3fc; }
+    button.danger { background: #7f1d1d; border-color: #7f1d1d; color: #fee2e2; }
+    button.danger:hover { background: #991b1b; }
+    .toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
+
+    /* Register watch table */
+    table.regs { width: 100%; border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    table.regs th, table.regs td { text-align: left; padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--border); }
+    table.regs th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    table.regs td.name { width: 3rem; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; }
+    table.regs td.dec { font-size: 1rem; font-weight: 600; color: var(--text); width: 12rem; }
+    table.regs tr.pc td.name { color: var(--pc); font-weight: 700; }
+    table.regs tr.pc td.dec { color: var(--pc); }
+
+    .pc-line { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.82rem; color: var(--muted); }
+    .pc-line b { color: var(--text); }
+
+    /* Program listing */
+    .prog { border: 1px solid var(--border); border-radius: 0.35rem; background: #090d15; }
+    .prog .line { display: grid; grid-template-columns: 2.2rem 1fr; padding: 0.35rem 0.6rem;
+      border-bottom: 1px solid var(--border); font-family: ui-monospace, monospace; font-size: 0.82rem; }
+    .prog .line:last-child { border-bottom: none; }
+    .prog .line .idx { color: var(--muted); text-align: right; padding-right: 0.5rem; }
+    .prog .line.current { background: rgba(56, 189, 248, 0.12); border-left: 3px solid var(--accent); }
+    .prog .line.current .idx { color: var(--accent); font-weight: 700; }
+    .prog .line .op { color: var(--accent-2); margin-right: 0.5rem; }
+    .prog .line .err { color: var(--bad); font-size: 0.72rem; margin-left: 0.6rem; }
+
+    /* Timeline */
+    .timeline { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    input[type=range] { width: 100%; cursor: pointer; }
+
+    .status-row { display: flex; gap: 1rem; font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+    .badge { display: inline-block; font-size: 0.72rem; padding: 0.1rem 0.5rem; border-radius: 0.3rem;
+      font-weight: 700; border: 1px solid; }
+    .badge.ok { color: var(--ok); border-color: var(--ok); background: rgba(34,197,94,0.1); }
+    .badge.bad { color: var(--bad); border-color: var(--bad); background: rgba(239,68,68,0.1); }
+
+    .errors { color: var(--bad); font-size: 0.78rem; margin-top: 0.5rem; }
+    .errors .err-line { margin-bottom: 0.3rem; padding: 0.25rem 0.5rem; background: #3f1414; border: 1px solid #7f1d1d; border-radius: 0.3rem; }
+
+    footer p { margin: 0; }
+  </style>
+</head>
+<body>
+<header>
+  <div style="display:flex;align-items:center;gap:0.5rem;">
+    <h1><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:block;"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+    Flip-16</h1>
+    <span class="tag">Logically reversible ISA</span>
+    <span class="tag">No backend — static TypeScript</span>
+    <span class="tag">No undo log</span>
+  </div>
+  <div class="toolbar" aria-label="Execution controls" style="margin:0 0 0 auto;">
+    <button id="btn-reset" class="danger">Reset</button>
+    <button id="btn-step-bwd">Step backward</button>
+    <button id="btn-step-fwd">Step forward</button>
+    <button id="btn-run-bwd">Run backward</button>
+    <button id="btn-run-fwd" class="primary">Run forward</button>
+  </div>
+</header>
+<main>
+  <section class="content-column">
+    <div class="card">
+      <h2><span class="dot"></span>Program</h2>
+      <div class="toolbar">
+        <label for="asm">Source (one instruction per line)</label>
+      </div>
+      <textarea id="asm" spellcheck="false">; Fibonacci: (r1, r2) = (F(n), F(n+1)) -> (F(n+1), F(n+2))
+REPEAT 8 {
+  ADD  r2, r1
+  SWAP r1, r2
+}</textarea>
+      <div class="prog" id="prog"></div>
+      <div id="asm-errors" class="errors"></div>
+    </div>
+
+    <div class="grid3">
+    <div class="card">
+      <h2><span class="dot"></span>Timeline</h2>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <label for="scrub">Execution position</label>
+        <input id="scrub" type="range" min="0" max="0" value="0" style="width:14rem;" />
+        <span id="scrub-val">0</span>
+      </div>
+      <div style="margin-top:0.4rem;font-size:0.74rem;color:var(--muted);">
+        Choose the boundary before instruction 0 through the completed boundary N. The machine is reset and replayed to that point.
+      </div>
+      <div class="status-row">
+        <span>Steps: <b id="steps">0</b></span>
+        <span>Log memory (baseline): <b id="logbytes">0</b> bytes</span>
+        <span>Flip-16 log: <b id="flip16log">0</b> bytes</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot"></span>Reversibility</h2>
+      <div id="sel-instr" style="font-family:ui-monospace,monospace;font-size:0.9rem;margin-bottom:0.4rem;">—</div>
+      <div id="sel-inverse" style="font-family:ui-monospace,monospace;font-size:0.9rem;color:var(--accent-2);margin-bottom:0.6rem;">inverse: —</div>
+      <div>Validation: <span id="val-status" class="badge ok">ready</span></div>
+      <div id="val-detail" style="font-size:0.78rem;color:var(--muted);margin-top:0.3rem;"></div>
+      <div style="margin-top:0.6rem;">
+        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.25rem;">Round-trip property:</div>
+        <button id="btn-roundtrip">Test backward(forward(S)) == S</button>
+        <div id="rt-result" style="margin-top:0.35rem;font-size:0.78rem;color:var(--muted);"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot"></span>Circuit (gate model)</h2>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">
+        Selected operation gate count / ancilla cleanliness.
+      </div>
+      <div class="status-row" style="font-size:0.78rem;">
+        <span>NOT: <b id="g-not">0</b></span>
+        <span>CNOT: <b id="g-cnot">0</b></span>
+        <span>Toffoli: <b id="g-toffoli">0</b></span>
+        <span>Fredkin: <b id="g-fredkin">0</b></span>
+      </div>
+      <div style="margin-top:0.4rem;">
+        <span class="badge" id="g-ancilla" class="ok">garbage ancillas: 0</span>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.78rem;color:var(--muted);" id="g-note"></div>
+    </div>
+
+    </div>
+  </section>
+
+  <aside class="sidebar">
+    <div class="card">
+      <h2><span class="dot"></span>State</h2>
+      <table class="regs" id="regs">
+        <thead>
+          <tr>
+            <th>Register</th>
+            <th>Value (decimal)</th>
+          </tr>
+        </thead>
+        <tbody id="regs-body"></tbody>
+      </table>
+      <div class="pc-line">
+        <span>PC boundary: <b id="pc">0</b> / <b id="pcN">0</b></span>
+        <span style="margin-left:auto;">Direction: <b id="dir">forward</b></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot"></span>Energy (theoretical)</h2>
+      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.4rem;">
+        Landauer lower bound only — not measured device energy.
+      </div>
+      <div style="font-size:0.82rem;">
+        <div>Erased bits (baseline): <b id="erased">0</b></div>
+        <div>Temperature T: <input id="temp" type="number" value="300" style="width:4rem;" /> K</div>
+        <div>Minimum energy: <b id="energy">0 J</b> per erased bit basis</div>
+      </div>
+      <div style="margin-top:0.5rem;font-size:0.74rem;color:var(--muted);">
+        Flip-16 erases 0 intentionally erased architectural bits in this model.<br>
+        Display: erasedBits &times; k &times; T &times; ln(2). At 300 K &asymp; 2.87&times;10<sup>-21</sup> J/bit.
+      </div>
+    </div>
+  </aside>
+</main>
+<footer>
+  Flip-16 — Logical reversibility demo. Physical energy recovery would require adiabatic circuits; this emulator shows logical reversibility, not device energy savings.
+</footer>
+<script type="module" src="ui.js"></script>
+</body>
+</html>
