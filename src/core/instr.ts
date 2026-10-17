@@ -8,34 +8,39 @@ export function regName(r: Reg): string {
   return REG_NAMES[r];
 }
 
-/** A decoded, typed instruction. Immutable after construction. */
-export type Instr = InstrBody;
+/** Execution mode selected by the assembler. Hybrid mode also admits logged instructions. */
+export type AssemblyMode = 'strict' | 'hybrid';
 
-export type Op =
-  | 'ADD' | 'SUB'
-  | 'ADDI' | 'SUBI'
-  | 'XOR'
-  | 'NOT' | 'NEG'
-  | 'ROL' | 'ROR'
-  | 'SWAP'
-  | 'EXCH'
-  | 'CADD' | 'CSUB'
-  | 'CSWAP';
+export type StrictOp =
+  | 'ADD' | 'SUB' | 'ADDI' | 'SUBI' | 'XOR' | 'NOT' | 'NEG'
+  | 'ROL' | 'ROR' | 'SWAP' | 'EXCH' | 'CADD' | 'CSUB' | 'CSWAP';
 
-/** Forward opcode -> its exact inverse opcode. */
-export const INVERSE_OP: Record<Op, Op> = {
-  ADD: 'SUB', SUB: 'ADD',
-  ADDI: 'SUBI', SUBI: 'ADDI',
-  XOR: 'XOR',
-  NOT: 'NOT', NEG: 'NEG',
-  ROL: 'ROR', ROR: 'ROL',
-  SWAP: 'SWAP',
-  EXCH: 'EXCH',
-  CADD: 'CSUB', CSUB: 'CADD',
-  CSWAP: 'CSWAP',
+/** These instructions rely on a bounded undo log in hybrid mode. */
+export type LoggedOp = 'MOV' | 'LOAD' | 'STORE' | 'SHR' | 'SHL' | 'AND' | 'JNZ';
+
+export type Op = StrictOp | LoggedOp;
+
+export function isLoggedOp(op: Op): op is LoggedOp {
+  return op === 'MOV' || op === 'LOAD' || op === 'STORE'
+    || op === 'SHR' || op === 'SHL' || op === 'AND' || op === 'JNZ';
+}
+
+export function isStrictOp(op: Op): op is StrictOp {
+  return !isLoggedOp(op);
+}
+
+export function isStrictInstr(instr: Instr): instr is StrictInstr {
+  return isStrictOp(instr.op);
+}
+
+/** Forward strict opcode -> its exact strict inverse opcode. */
+export const INVERSE_OP: Record<StrictOp, StrictOp> = {
+  ADD: 'SUB', SUB: 'ADD', ADDI: 'SUBI', SUBI: 'ADDI', XOR: 'XOR',
+  NOT: 'NOT', NEG: 'NEG', ROL: 'ROR', ROR: 'ROL', SWAP: 'SWAP',
+  EXCH: 'EXCH', CADD: 'CSUB', CSUB: 'CADD', CSWAP: 'CSWAP',
 } as const;
 
-export function isInversePair(a: Op, b: Op): boolean {
+export function isInversePair(a: StrictOp, b: StrictOp): boolean {
   return INVERSE_OP[a] === b && INVERSE_OP[b] === a;
 }
 
@@ -54,51 +59,51 @@ export interface InstrCADD { readonly op: 'CADD'; readonly rd: Reg; readonly rs:
 export interface InstrCSUB { readonly op: 'CSUB'; readonly rd: Reg; readonly rs: Reg; readonly rc: Reg; }
 export interface InstrCSWAP { readonly op: 'CSWAP'; readonly ra: Reg; readonly rb: Reg; readonly rc: Reg; }
 
-export type InstrBody =
-  | InstrADD | InstrSUB | InstrADDI | InstrSUBI | InstrXOR
-  | InstrNOT | InstrNEG | InstrROL | InstrROR
-  | InstrSWAP | InstrEXCH
-  | InstrCADD | InstrCSUB | InstrCSWAP;
+export interface InstrMOV { readonly op: 'MOV'; readonly rd: Reg; readonly rs: Reg; }
+export interface InstrLOAD { readonly op: 'LOAD'; readonly rd: Reg; readonly ra: Reg; }
+export interface InstrSTORE { readonly op: 'STORE'; readonly ra: Reg; readonly rs: Reg; }
+export interface InstrSHR { readonly op: 'SHR'; readonly rd: Reg; readonly amount: number; }
+export interface InstrSHL { readonly op: 'SHL'; readonly rd: Reg; readonly amount: number; }
+export interface InstrAND { readonly op: 'AND'; readonly rd: Reg; readonly rs: Reg; }
+/** target is a zero-based instruction index resolved by the assembler. */
+export interface InstrJNZ { readonly op: 'JNZ'; readonly rc: Reg; readonly target: number; readonly label: string; }
+
+export type StrictInstr =
+  | InstrADD | InstrSUB | InstrADDI | InstrSUBI | InstrXOR | InstrNOT | InstrNEG
+  | InstrROL | InstrROR | InstrSWAP | InstrEXCH | InstrCADD | InstrCSUB | InstrCSWAP;
+export type LoggedInstr = InstrMOV | InstrLOAD | InstrSTORE | InstrSHR | InstrSHL | InstrAND | InstrJNZ;
+/** A decoded, typed instruction. Immutable after construction. */
+export type InstrBody = StrictInstr | LoggedInstr;
+export type Instr = InstrBody;
 
 export function rdOf(i: InstrBody): Reg | null {
   switch (i.op) {
-    case 'ADD': case 'SUB': case 'XOR': return i.rd;
-    case 'ADDI': case 'SUBI': return i.rd;
-    case 'NOT': case 'NEG': return i.rd;
-    case 'ROL': case 'ROR': return i.rd;
-    case 'EXCH': return i.rd;
-    case 'CADD': case 'CSUB': return i.rd;
-    case 'SWAP': case 'CSWAP': return null;
-    default: return null;
+    case 'ADD': case 'SUB': case 'XOR': case 'MOV': case 'AND': return i.rd;
+    case 'ADDI': case 'SUBI': case 'NOT': case 'NEG': case 'ROL': case 'ROR': case 'SHR': case 'SHL':
+    case 'EXCH': case 'LOAD': case 'CADD': case 'CSUB': return i.rd;
+    case 'SWAP': case 'CSWAP': case 'STORE': case 'JNZ': return null;
   }
 }
 
 export function srcRegsOf(i: InstrBody): Reg[] {
   switch (i.op) {
-    case 'ADD': case 'SUB': case 'XOR': return [i.rs];
-    case 'ADDI': case 'SUBI': return [];
-    case 'NOT': case 'NEG': return [];
-    case 'ROL': case 'ROR': return [];
+    case 'ADD': case 'SUB': case 'XOR': case 'MOV': case 'AND': return [i.rs];
+    case 'ADDI': case 'SUBI': case 'NOT': case 'NEG': case 'ROL': case 'ROR': case 'SHR': case 'SHL': return [];
     case 'SWAP': return [i.ra, i.rb];
-    case 'EXCH': return [i.ra];
+    case 'EXCH': case 'LOAD': return [i.ra];
+    case 'STORE': return [i.ra, i.rs];
     case 'CADD': case 'CSUB': return [i.rs, i.rc];
     case 'CSWAP': return [i.ra, i.rb, i.rc];
-    default: return [];
+    case 'JNZ': return [i.rc];
   }
 }
 
 export function immOf(i: InstrBody): Word | null {
-  switch (i.op) {
-    case 'ADDI': case 'SUBI': return i.imm;
-    default: return null;
-  }
+  return i.op === 'ADDI' || i.op === 'SUBI' ? i.imm : null;
 }
 
 export function rotateAmountOf(i: InstrBody): number | null {
-  switch (i.op) {
-    case 'ROL': case 'ROR': return i.amount;
-    default: return null;
-  }
+  return i.op === 'ROL' || i.op === 'ROR' ? i.amount : null;
 }
 
 export function toString(i: InstrBody): string {
@@ -117,6 +122,12 @@ export function toString(i: InstrBody): string {
     case 'CADD': return `CADD ${regName(i.rd)}, ${regName(i.rs)}, ${regName(i.rc)}`;
     case 'CSUB': return `CSUB ${regName(i.rd)}, ${regName(i.rs)}, ${regName(i.rc)}`;
     case 'CSWAP': return `CSWAP ${regName(i.ra)}, ${regName(i.rb)}, ${regName(i.rc)}`;
-    default: return '<unknown>';
+    case 'MOV': return `MOV ${regName(i.rd)}, ${regName(i.rs)}`;
+    case 'LOAD': return `LOAD ${regName(i.rd)}, [${regName(i.ra)}]`;
+    case 'STORE': return `STORE [${regName(i.ra)}], ${regName(i.rs)}`;
+    case 'SHR': return `SHR ${regName(i.rd)}, ${i.amount}`;
+    case 'SHL': return `SHL ${regName(i.rd)}, ${i.amount}`;
+    case 'AND': return `AND ${regName(i.rd)}, ${regName(i.rs)}`;
+    case 'JNZ': return `JNZ ${regName(i.rc)}, ${i.label}`;
   }
 }

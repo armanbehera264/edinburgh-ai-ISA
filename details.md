@@ -1,101 +1,211 @@
-# Flip-16: a reversible instruction-set architecture
+# Flip-16 Hybrid Architecture Specification
 
-## 1. Purpose and scope
+## 1. Status, terminology, and normative language
 
-Flip-16 is an educational, browser-run emulator for a **logically reversible** 16-bit processor. Its central claim is narrow and testable:
+This document specifies the next version of Flip-16: a hybrid reversible/logged 16-bit architecture. It replaces the previous “every instruction must be intrinsically reversible” design as the product direction, while preserving that strict ISA as a first-class execution mode.
 
-> For every legal instruction executed in a legal machine state, there is exactly one predecessor and exactly one successor state.
+**Implementation status on 17 October 2026:** the repository implements the strict core and the first hybrid release: strict/hybrid assembly modes, labels, `MOV`, `LOAD`, `STORE`, `SHR`, `SHL`, `AND`, `JNZ`, a bounded typed undo stack, and hybrid browser controls. The multiplication, comparison, and vector extensions remain future work. The sections below specify the shipped behavior unless explicitly marked as a future extension.
 
-Consequently, the emulator can recover an earlier state by executing inverse instructions in reverse program order. It does not store an execution log.
+The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are used in their normative sense.
 
-The project is intended to demonstrate three related ideas:
+Definitions:
 
-1. An ISA can avoid destructive assignment by using only bijective state transformations.
-2. A reversible program can be stepped backwards without a debugger trace.
-3. The same constraints appear in reversible Boolean circuits and quantum-oracle construction.
+- **Strict instruction:** An instruction whose transformation is a bijection over the architectural state it touches. Its inverse is derivable from the instruction itself; it creates no log record.
+- **Logged instruction:** An instruction that would destroy information, paired with an undo record containing sufficient information to restore the pre-instruction state.
+- **Hybrid state:** Architectural registers, memory, PC, and the append-only undo log considered together.
+- **Undo record:** One LIFO record appended before a logged instruction modifies architectural state.
+- **Pure region:** A sequence containing strict instructions only. It can be undone with zero log bytes.
+- **Logged region:** A sequence containing one or more logged instructions. It can be undone only while its corresponding undo records are retained.
+- **External boundary:** I/O, reset, host mutation, or observation that is not represented in Flip-16 state. It cannot be undone by this architecture.
 
-The MVP is a straight-line machine: the program counter advances through a fixed instruction list; conditionals are data-controlled instructions, not branches. This is deliberate. General branches and ordinary halting complicate the reversible control state and are deferred.
+## 2. Decision summary
 
-This project is **not** a claim that an emulator, FPGA, or ordinary CMOS implementation saves energy. It demonstrates logical reversibility. Physical energy recovery would require specialized adiabatic circuits.
+Flip-16-H uses a two-path machine:
 
-## 2. Chosen design
+```text
+                 ┌───────────────────────────────────────────┐
+                 │                 Decoder                   │
+                 └───────────────┬───────────────────────────┘
+                                 │
+              strict opcode      │       logged opcode
+                                 │
+       ┌─────────────────────────▼───┐  ┌─────────────────────▼───────────┐
+       │ Reversible ALU / EXCH path  │  │ Undo-log preflight and append    │
+       │ No history record           │  │ Destructive execution path       │
+       └──────────────┬──────────────┘  └──────────────┬──────────────────┘
+                      └───────────────┬────────────────┘
+                                      ▼
+                         registers, memory, next PC
+```
 
-| Topic | Decision |
-|---|---|
-| Word size | 16 bits, unsigned modulo \(2^{16}\) arithmetic |
-| Registers | Eight general-purpose registers: `r0`–`r7`; none is hard-wired to zero |
-| Memory | 65,536 addressable 16-bit words (128 KiB), addressed by a register value |
-| Code | Immutable program array; code is not data memory |
-| Control flow | Straight-line only in MVP; assembler expands literal `REPEAT` blocks |
-| Conditions | A condition is true iff its 16-bit register value is non-zero |
-| Reverse execution | UI/API operation: decrement PC, then execute the exact instruction inverse |
-| Primary implementation | TypeScript, no backend, static web application |
-| Gate model | Optional reversible gate netlist for selected ALU operations, not physical hardware |
+| Decision | Chosen approach | Rationale |
+|---|---|---|
+| Baseline ISA | Preserve the existing strict instruction set | Keeps a zero-log reference design and simple correctness proof |
+| Destructive convenience | Add explicit logged opcodes, never silently convert strict opcodes | Log use remains visible in source, traces, and performance reporting |
+| Log discipline | LIFO undo stack, append before mutation | Reverse order matches backward execution exactly |
+| Reverse dispatcher | Peek at a matching log record first; otherwise execute a strict inverse | Supports strict runs with no records and logged branches with non-linear PC movement |
+| Initial log representation | Structured `UndoRecord[]` in TypeScript | Easy to inspect, validate, test, and render |
+| Future compact representation | Byte-packed variable-length records | Optimisation only after the structured version is correct |
+| Program modes | `strict` and `hybrid` compile modes | Strict mode remains a useful proof and teaching mode |
+| Multiplication | Add accumulator-style strict extensions before a destructive `MUL` | `MULADD` supports numerical code without logging destination history |
+| Control flow | Keep strict mode straight-line; permit only logged branches in hybrid mode | Branch provenance is explicitly recorded rather than hand-waved |
+| I/O | Keep outside the reversible/hybrid machine state | Avoids false claims that printing or network writes can be undone |
 
-All register and memory values are members of `Word = {0, …, 65535}`. Arithmetic is always reduced modulo 65536. For example, `0xffff + 1 = 0x0000`.
+## 3. Goals and non-goals
 
-### Why eight general registers?
+### 3.1 Goals
 
-Eight registers make the UI comprehensible, give enough temporaries for a small cipher or Bennett uncomputation demonstration, and keep instruction encoding compact. A fixed zero register was rejected because a register that can never change weakens the simple “every register is ordinary state” story. A zero value is instead supplied at program initialization and restored by uncomputation when needed.
+1. Preserve exact backward stepping for every successfully executed instruction until the required undo record has been discarded.
+2. Retain zero undo-log consumption for all strict instructions.
+3. Permit a deliberately small, useful destructive subset: assignment, load, store, lossy shifts, selected bitwise operations, and branches.
+4. Make log usage measurable by instruction, program region, and total byte count.
+5. Give programmers a path to more realistic numerical, matrix, and neural-network experiments without pretending that ReLU or quantisation are intrinsically reversible.
+6. Keep the initial emulator simple enough to inspect line-by-line in TypeScript.
 
-## 3. Formal machine model
+### 3.2 Non-goals
 
-At an instruction boundary, the mutable architectural state is:
+- Proving energy savings on current laptops, browsers, FPGAs, or ordinary CMOS.
+- Reversing host I/O, DOM changes, file writes, networking, randomness, or wall-clock time.
+- Replacing a general-purpose ISA.
+- Hiding logging behind familiar operations so that programs appear more reversible than they are.
+- Adding every x86/ARM instruction. Each instruction must justify its log format, reverse rule, alias rules, and test plan.
+- Supporting arbitrary self-modifying code. Program code is immutable during execution.
+
+## 4. Machine state
+
+### 4.1 Existing strict state
+
+All words are unsigned 16-bit values reduced modulo 65536.
 
 ```ts
-type Word = number; // canonicalized to 0..0xffff
+type Word = number; // 0..0xffff
+type Reg = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
-type State = {
-  regs: Uint16Array; // length 8
-  mem: Uint16Array;  // length 65536
-  pc: number;        // 0 <= pc <= program.length
+type StrictState = {
+  regs: Uint16Array; // eight words
+  mem: Uint16Array;  // 65,536 words, indexed by a full Word address
+  pc: number;        // boundary in the immutable program, 0..program.length
 };
 ```
 
-For a program containing `N` instructions, `pc` denotes the **next forward instruction**. Thus `pc = 0` is the entry boundary and `pc = N` is the completed boundary.
+`pc` means “the next instruction to execute forward.” For a program of length `N`, `pc = 0` is its entry boundary and `pc = N` is its completed boundary.
 
-Forward execution of instruction `i` is defined only for `0 <= i < N`:
+### 4.2 Hybrid state
 
-```text
-executeForward(program[pc], state)
-pc := pc + 1
+Hybrid state extends strict state with an undo log and explicit resource limits:
+
+```ts
+type LogTag =
+  | 'MOV' | 'LOAD' | 'STORE' | 'SHR' | 'SHL' | 'AND' | 'JNZ';
+
+type UndoRecord = {
+  tag: LogTag;
+  pcBefore: number;
+  pcAfter: number;
+  payload: unknown; // discriminated precisely in Section 8
+};
+
+type HybridState = StrictState & {
+  undoLog: UndoRecord[];
+  logBytesUsed: number;
+  logByteLimit: number;
+};
 ```
 
-Backward execution is defined only for `0 < pc <= N`:
+The log is part of the abstract machine state. A logged instruction becomes reversible only over the enlarged state `(regs, mem, pc, undoLog)`. The instruction alone is still destructive.
+
+### 4.3 Boundary conditions
+
+- `stepForward` at `pc === N` MUST fail without modifying registers, memory, PC, or log.
+- `stepBackward` at the initial entry with `pc === 0` and an empty log MUST fail without mutation.
+- A logged forward instruction MUST preflight log capacity before it mutates architectural state. A full log is a precise `LogOverflow` error, not a partially executed instruction.
+- A reverse operation with an inconsistent record, impossible `pcAfter`, unexpected tag, or bad payload MUST raise `UndoLogCorruption` and leave state unchanged. Silent recovery is forbidden.
+- Program loading, initial state seeding, log clearing, and UI Reset are external boundaries. They are not CPU instructions.
+
+## 5. Execution semantics
+
+### 5.1 Strict forward and backward execution
+
+For strict instruction `P[pc]`:
 
 ```text
-pc := pc - 1
-executeInverse(program[pc], state)
+forward:
+    require 0 <= pc < N
+    executeStrictForward(P[pc])
+    pc := pc + 1
+
+backward:
+    require 0 < pc <= N
+    pc := pc - 1
+    executeStrictInverse(P[pc])
 ```
 
-`stepForward` at `pc === N` and `stepBackward` at `pc === 0` return a boundary error without modifying state. There is no architectural `HALT` instruction: a conventional halt bit would need its own reversible protocol. A complete finite program is represented by reaching its end boundary.
-
-For every internal transition, the required property is:
+For every legal strict state `S` and strict instruction `I`:
 
 ```text
-stepBackward(stepForward(S, P), P) = S
-stepForward(stepBackward(S, P), P) = S
+inverse(I)(I(S)) = S
+I(inverse(I)(S)) = S
 ```
 
-The direction selector is an emulator/UI control argument, not an instruction that silently mutates machine state. If a hardware version is made later, direction must be an externally stable control signal or be changed using an explicitly reversible protocol.
+No undo record is appended or consumed.
 
-### State outside the reversible core
+### 5.2 Hybrid forward execution
 
-Program loading, initial register/memory initialization, screen drawing, console output, and a user pressing Reset are outside the reversible computation. They interact with the environment and are generally irreversible. The demo must label this boundary clearly: *the pure execution region is reversible; I/O is not.*
+Each logged instruction executes atomically:
 
-## 4. ISA semantics
+```text
+1. Decode P[pc] and validate operands/mode.
+2. Read every old value required by that instruction's undo record.
+3. Determine pcAfter.
+4. Construct UndoRecord(tag, pcBefore = pc, pcAfter, payload).
+5. Check logByteLimit against encoded size of the record.
+6. Append the record.
+7. Perform the destructive register/memory/PC update.
+8. Set pc := pcAfter.
+```
 
-### 4.1 General rules
+If any part of steps 1–5 fails, steps 6–8 MUST NOT occur. If host allocation fails in a prototype, the implementation MUST treat it as a failed instruction rather than leave an architectural state without the matching record.
 
-- Every update is in-place: its destination is also an input to the transformation.
-- `x + y`, `x - y`, negation, and rotate all use 16-bit modular semantics.
-- `imm` is a 16-bit bit pattern. Source syntax accepts decimal, hexadecimal (`0x...`), or signed decimal; the assembler reduces it modulo 65536.
-- An instruction whose operands violate the legality rules is rejected by the assembler. The emulator also validates decoded programs defensively.
-- `INV(op)` in the following table is the operation used by backward execution.
+### 5.3 Hybrid backward dispatcher
 
-### 4.2 Core instruction table
+The reverse algorithm cannot always blindly decrement PC: a logged branch may have jumped to an arbitrary successor. It MUST use the log first.
 
-| Mnemonic | Forward semantics | Exact inverse | Required legality |
+```text
+stepBackwardHybrid(state, program):
+    if undoLog is not empty and undoLog.top.pcAfter == state.pc:
+        record := undoLog.top
+        verify program[record.pcBefore] is compatible with record.tag
+        restore state from record.payload
+        state.pc := record.pcBefore
+        pop record
+        decrease logBytesUsed by encodedRecordSize(record)
+        return
+
+    # No logged instruction ended at this boundary. The preceding instruction
+    # must be strict and therefore must lie immediately before the current PC.
+    require state.pc > 0
+    state.pc := state.pc - 1
+    require program[state.pc] is strict
+    executeStrictInverse(program[state.pc])
+```
+
+The `pcAfter` match is essential. Consider a logged `MOV` at PC 3 followed by strict instructions at PCs 4 and 5. At PC 6 the record’s `pcAfter` is 4, so PC 5 is undone strictly, then PC 4 is undone strictly, and only at PC 4 does the dispatcher consume the `MOV` record. For a taken `JNZ`, `pcAfter` can be an arbitrary target; the matching record identifies the predecessor unambiguously.
+
+### 5.4 Program-level reversibility property
+
+Let `F` be a sequence of successfully executed hybrid forward steps from initial hybrid state `H0`, and let `B` be the same number of hybrid backward steps, with no external boundary or log truncation between them. Then:
+
+```text
+B(F(H0)) = H0
+```
+
+The equality includes registers, all memory words, PC, log content, and `logBytesUsed`. It does not include host rendering state, elapsed time, or user interaction.
+
+## 6. Strict ISA retained from Flip-16
+
+Strict mode keeps these operations exactly because they are bijective under the stated alias restrictions.
+
+| Instruction | Forward effect | Inverse | Required restriction |
 |---|---|---|---|
 | `ADD rd, rs` | `rd := rd + rs` | `SUB rd, rs` | `rd != rs` |
 | `SUB rd, rs` | `rd := rd - rs` | `ADD rd, rs` | `rd != rs` |
@@ -104,361 +214,369 @@ Program loading, initial register/memory initialization, screen drawing, console
 | `XOR rd, rs` | `rd := rd XOR rs` | itself | `rd != rs` |
 | `NOT rd` | `rd := NOT rd` | itself | none |
 | `NEG rd` | `rd := -rd` | itself | none |
-| `ROL rd, k` | rotate `rd` left by `k mod 16` | `ROR rd, k` | none |
-| `ROR rd, k` | rotate `rd` right by `k mod 16` | `ROL rd, k` | none |
-| `SWAP ra, rb` | exchange `ra` and `rb` | itself | `ra != rb` |
-| `EXCH rd, [ra]` | exchange `rd` and `mem[regs[ra]]` | itself | `rd != ra` |
-| `CADD rd, rs, rc` | if `rc != 0`, `rd := rd + rs` | `CSUB rd, rs, rc` | `rd != rs`, `rd != rc` |
-| `CSUB rd, rs, rc` | if `rc != 0`, `rd := rd - rs` | `CADD rd, rs, rc` | `rd != rs`, `rd != rc` |
-| `CSWAP ra, rb, rc` | if `rc != 0`, exchange `ra`, `rb` | itself | `ra`, `rb`, and `rc` pairwise distinct |
+| `ROL rd, k` | rotate left by `k mod 16` | `ROR rd, k` | none |
+| `ROR rd, k` | rotate right by `k mod 16` | `ROL rd, k` | none |
+| `SWAP ra, rb` | exchange registers | itself | `ra != rb` |
+| `EXCH rd, [ra]` | exchange `rd` with `mem[ra]` | itself | `rd != ra` |
+| `CADD rd, rs, rc` | if `rc != 0`, add `rs` into `rd` | `CSUB` | `rd != rs`, `rd != rc` |
+| `CSUB rd, rs, rc` | if `rc != 0`, subtract `rs` from `rd` | `CADD` | `rd != rs`, `rd != rc` |
+| `CSWAP ra, rb, rc` | if `rc != 0`, exchange `ra` and `rb` | itself | all three registers distinct |
 
-`rs` may equal `rc` in `CADD`/`CSUB`; the condition and source are read before the update and neither is modified. The stricter rule is only that the destination may not overlap either value being read.
+The existing [syntax.md](syntax.md) is the authoritative user-facing syntax document for the shipped strict and hybrid instruction sets.
 
-### 4.3 Why each restriction is necessary
+## 7. Logged ISA
 
-`ADD r1, r1` maps `r1` to `2*r1 mod 65536`. Both `0x0000` and `0x8000` map to zero, so it has no unique inverse. The same issue applies to `SUB r1, r1`.
+The first hybrid release MUST remain deliberately small. Every logged opcode is explicit in source and rejected by strict-mode compilation.
 
-`XOR r1, r1` maps every input to zero. It is destructive and illegal.
+### 7.1 `MOV rd, rs`
 
-`EXCH r1, [r1]` is ambiguous after execution: the register no longer contains the address of the cell that was exchanged. Reversing cannot identify that cell. Requiring distinct data and address registers avoids this problem.
+```text
+forward: regs[rd] := regs[rs]; pcAfter := pc + 1
+record:  oldDestination = regs[rd]
+undo:    regs[rd] := oldDestination; pc := pcBefore
+```
 
-For a controlled operation, the control must not be changed. `CSWAP r1, r2, r1` could change the control while swapping, so the inverse cannot reliably decide whether a swap occurred. Requiring a distinct control register makes the control predicate identical on the forward and reverse path.
+`rd == rs` SHOULD be rejected as a no-op programming error. `MOV` needs no special source/destination alias rule otherwise: the source is read before the destination write.
 
-An identity operation such as `SWAP r1, r1` is mathematically reversible, but the assembler rejects it because it usually indicates a programming mistake and adds no demonstrable value.
+### 7.2 `LOAD rd, [ra]`
 
-### 4.4 No loads, stores, flags, or assignment
+```text
+address := regs[ra]
+forward: regs[rd] := mem[address]; pcAfter := pc + 1
+record:  oldDestination = regs[rd]
+undo:    regs[rd] := oldDestination; pc := pcBefore
+```
 
-There is no `MOV`, `LOAD`, `STORE`, `AND`, `OR`, shift, compare, or hidden flags register.
+Version 1 MUST require `rd != ra`. Although a record could restore `rd` even when it is also the address register, rejecting the overlap keeps operand timing, UI explanation, and future hardware semantics simple.
 
-- `EXCH` is the only memory transfer; it preserves both the old register value and the old memory value by exchanging them.
-- A copy is made reversibly only into known-clean storage: `XOR dst, src` when `dst` is known to be zero. Later, applying the same XOR erases that copy.
-- Right/left shifts are represented by `ROR`/`ROL`, which preserve every bit.
-- Conditions live in an ordinary, unmodified register. This avoids destructive condition-code flags.
+### 7.3 `STORE [ra], rs`
 
-The fact that a value is zero is a **program invariant**, not a free instruction. The UI may display a “known-clean” annotation supplied by the assembler/demo, but the CPU does not infer semantic cleanliness from a raw zero value.
+```text
+address := regs[ra]
+forward: mem[address] := regs[rs]; pcAfter := pc + 1
+record:  address, oldMemory = mem[address]
+undo:    mem[address] := oldMemory; pc := pcBefore
+```
 
-## 5. Memory, aliasing, and program encoding
+The record MUST include the resolved address, not merely `ra`. A future instruction between store and reverse might change `ra`; an undo record must be self-sufficient. `ra == rs` is legal because the store does not alter either register.
 
-Memory is `Uint16Array(65536)`. A register’s full 16-bit value selects a word directly, so there are no out-of-range addresses and no address truncation. Memory is initialized by the test harness or demo loader before execution.
+### 7.4 `SHR rd, k` and `SHL rd, k`
 
-The assembler produces a typed immutable representation rather than raw packed binary for the MVP:
+Shifts use `0 <= k <= 15`. They are distinct from existing rotates.
+
+For `SHR`, define `lost = oldRd & ((1 << k) - 1)` for `k > 0`; for `k = 0`, `lost = 0`.
+
+```text
+forward: rd := oldRd >>> k
+record:  amount = k, lostLowBits = lost
+undo:    rd := (rd << k) OR lostLowBits
+```
+
+For `SHL`, define `lost = oldRd >>> (16 - k)` for `k > 0`.
+
+```text
+forward: rd := (oldRd << k) mod 2^16
+record:  amount = k, lostHighBits = lost
+undo:    rd := (rd >>> k) OR (lostHighBits << (16 - k))
+```
+
+The implementation MUST mask all results to 16 bits. Logging only the discarded bits is materially more efficient than logging the full old word: `k` bits of payload rather than 16, though the first structured emulator MAY store the loss in a 16-bit field for clarity.
+
+### 7.5 `AND rd, rs` and optional `ANDI rd, imm`
+
+`AND` is destructive because distinct old destination values can yield the same result. Version 1 records the full old destination word:
+
+```text
+forward: rd := rd AND rs
+record:  oldDestination
+undo:    rd := oldDestination
+```
+
+`rd == rs` is legal in hybrid mode but SHOULD produce a compiler warning: it turns the register into itself and needlessly consumes a record. `OR`, `ORI`, and ordinary `MUL rd, rs` are deferred; they use the same full-old-destination record pattern but are not needed in the first cut.
+
+### 7.6 `JNZ rc, label`
+
+General control flow is a logged escape hatch. At assembly time, `label` resolves to an instruction-boundary PC.
+
+```text
+pcBefore := pc
+pcAfter := (regs[rc] != 0) ? targetPc : pc + 1
+record: pcBefore, pcAfter, conditionWasNonzero
+forward: pc := pcAfter
+undo: pc := pcBefore
+```
+
+The condition value itself is not changed and need not be copied. `pcBefore` and `pcAfter` are nevertheless mandatory record fields: a target may have many predecessors, so the current PC alone cannot identify the branch that led there. `conditionWasNonzero` is retained as an audit/debug assertion; reverse execution need not recompute it and MUST validate it only if the implementation can do so without changing state.
+
+Unconditional `JMP label` is also destructive with respect to predecessor PC and MAY be represented as `JNZ` with a dedicated guaranteed-nonzero control register only if that invariant is explicit. A standalone `JMP` is deferred from Version 1.
+
+## 8. Undo-record schema and storage accounting
+
+### 8.1 Structured prototype representation
+
+**[TARGET, first implementation]** Use a tagged TypeScript union:
 
 ```ts
-type Reg = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-
-type Instr =
-  | { op: 'ADD' | 'SUB' | 'XOR' | 'SWAP'; rd: Reg; rs: Reg }
-  | { op: 'ADDI' | 'SUBI'; rd: Reg; imm: Word }
-  | { op: 'NOT' | 'NEG'; rd: Reg }
-  | { op: 'ROL' | 'ROR'; rd: Reg; amount: number }
-  | { op: 'EXCH'; rd: Reg; ra: Reg }
-  | { op: 'CADD' | 'CSUB'; rd: Reg; rs: Reg; rc: Reg }
-  | { op: 'CSWAP'; ra: Reg; rb: Reg; rc: Reg };
+type UndoRecord =
+  | { tag: 'MOV';   pcBefore: number; pcAfter: number; oldDestination: Word }
+  | { tag: 'LOAD';  pcBefore: number; pcAfter: number; oldDestination: Word }
+  | { tag: 'STORE'; pcBefore: number; pcAfter: number; address: Word; oldMemory: Word }
+  | { tag: 'SHR';   pcBefore: number; pcAfter: number; amount: number; lostBits: Word }
+  | { tag: 'SHL';   pcBefore: number; pcAfter: number; amount: number; lostBits: Word }
+  | { tag: 'AND';   pcBefore: number; pcAfter: number; oldDestination: Word }
+  | { tag: 'JNZ';   pcBefore: number; pcAfter: number; taken: boolean };
 ```
 
-The UI may render a compact pseudo-binary encoding, but binary format is not an MVP requirement. Designing a real instruction word before the emulator exists creates unnecessary constraints and distracts from the reversibility proof.
+This object representation is for semantic correctness and UI inspection. JavaScript object allocation overhead MUST NOT be presented as architectural log size.
 
-If a later FPGA target needs fixed-width encoding, a 32-bit word is sufficient: 5 opcode bits, three 3-bit register fields, a 4-bit rotation amount or 16-bit immediate field, and reserved zeros. The ROM itself must be immutable while a program executes.
+### 8.2 Canonical packed-size accounting
 
-## 6. Assembler and source language
-
-The assembler accepts one instruction per line, labels only for display in the MVP, comments beginning with `;` or `//`, and the compile-time macro:
+For comparisons and future byte packing, account records as:
 
 ```text
-REPEAT <non-negative decimal literal> {
-  ...straight-line instructions...
-}
+header = tag (1 byte) + payload length (1 byte) + pcBefore (2 bytes) + pcAfter (2 bytes)
 ```
 
-Nested `REPEAT` is allowed with a maximum expanded program length of 65,535 instructions. The count must be a literal; allowing a runtime register count would create a loop and need reversible loop-entry/exit rules.
+| Tag | Payload | Canonical record size |
+|---|---|---:|
+| `MOV` | old destination word | 8 bytes |
+| `LOAD` | old destination word | 8 bytes |
+| `STORE` | resolved address + old memory word | 10 bytes |
+| `SHR` / `SHL` | amount byte + one 16-bit loss field | 9 bytes |
+| `AND` | old destination word | 8 bytes |
+| `JNZ` | taken flag byte | 7 bytes |
 
-Example:
+These are Version-1 accounting sizes, not a lower bound. A later compact codec may omit `pcAfter` for linear instructions, pack shift-loss bits densely, or delta-code PCs. It MUST decode to the same logical record and produce exactly the same reverse behavior.
 
-```asm
-; Fibonacci state is (r1, r2) = (F(n), F(n+1)).
-REPEAT 8 {
-  ADD  r2, r1
-  SWAP r1, r2
-}
-```
+### 8.3 Log capacity and truncation
 
-The assembler performs these checks before producing any runnable program:
+`logByteLimit` is selected when hybrid state is created. The browser demonstration uses and displays a 64 KiB limit; callers of `newHybridState(limit)` may select a different limit through the core API.
 
-1. register spelling/range and immediate syntax;
-2. operand aliasing rules in Section 4;
-3. rotation normalization to `0..15`;
-4. balanced, literal-bounded `REPEAT` blocks;
-5. expanded length limit;
-6. optional demo contracts, for example “`r5` must begin at zero.”
+There are only three legitimate ways to reclaim undo-log storage:
 
-It reports the source line, the rejected instruction, and the reversibility reason; e.g., “line 12: `XOR r2, r2` erases its input and has no inverse.”
+1. Step backward and pop records.
+2. Reach an explicitly declared irreversible checkpoint that discards the ability to go before that checkpoint.
+3. End the computation and discard the entire state/log externally.
 
-Labels are deliberately not branch targets in the MVP. Permitting labels is useful for readable traces but does not imply a `JMP` instruction.
+An automatic circular overwrite policy is prohibited in Version 1 because it silently invalidates older backward steps. If checkpoints are later added, the UI MUST label the earliest reversible boundary and require an explicit user/program acknowledgement before truncating records.
 
-## 7. Reversing a program
+### 8.4 Confidentiality
 
-The runtime implementation needs one semantic evaluator and an inverse-opcode mapping:
+Undo records contain prior register and memory contents. They can therefore retain secrets after a program no longer references those values. A production-oriented implementation SHOULD support clearing the log at an explicit irreversible boundary and MUST NOT claim that log-backed execution is inherently privacy-preserving.
+
+## 9. Compiler, assembler, and mode rules
+
+### 9.1 Mode selection
+
+The assembler API exposes a mode:
 
 ```ts
-const inverse: Record<Instr['op'], Instr['op']> = {
-  ADD: 'SUB', SUB: 'ADD', ADDI: 'SUBI', SUBI: 'ADDI',
-  XOR: 'XOR', NOT: 'NOT', NEG: 'NEG', ROL: 'ROR', ROR: 'ROL',
-  SWAP: 'SWAP', EXCH: 'EXCH', CADD: 'CSUB', CSUB: 'CADD', CSWAP: 'CSWAP',
-};
+type CompileMode = 'strict' | 'hybrid';
+assemble(source, { mode: 'strict' | 'hybrid' })
 ```
 
-`stepBackward` looks up the preceding instruction, replaces its opcode with `inverse[op]`, and passes it to the same evaluator. It does not need a history buffer.
+- `strict` accepts only Section 6 operations and compile-time `REPEAT`.
+- `hybrid` accepts all strict operations plus Section 7 operations and labels for logged branches.
+- Hybrid mode MUST NOT change the semantics or inverse mapping of a strict instruction.
+- The compiled program MUST classify every instruction as `strict` or `logged`.
 
-The assembler should also expose a `makeInverseProgram(program)` utility for testing and export:
+### 9.2 Labels
 
-```text
-inverseProgram(P) = reverse(map(invertOpcode, P))
-```
-
-Running `inverseProgram(P)` forward from `P`’s final state must yield its initial state. This is mathematically equivalent to stepping the original program backward; it is an important independent test oracle.
-
-## 8. Control-flow roadmap
-
-### MVP: branch-free execution
-
-The PC is always changed by exactly one by the stepping rule. `CADD` and `CSWAP` express bounded if-like computation, and literal unrolling expresses fixed-count loops. This gives a clean PC inverse without recording path history.
-
-### Deferred extension: Janus-style structured control flow
-
-The recommended first extension is structured source syntax rather than raw jumps:
-
-```text
-IF condition THEN
-  then-block
-ELSE
-  else-block
-FI exit-condition
-```
-
-The entry condition selects a path. The exit condition must prove which path was taken, and both condition registers must remain valid as required by the construct. Loops similarly need distinct entry and exit assertions. This retains reversibility but requires static checking and a more complicated PC/control-state design.
-
-### Rejected for the MVP: raw `JMP`/`JNZ`
-
-A conventional conditional branch merges distinct predecessor PCs at a join point. At the join, the inverse machine cannot know which predecessor to revisit without an extra history bit or a structured assertion. Raw branches would make the demo’s core claim less clear and are not worth the implementation risk in an MVP.
-
-## 9. Gate-level model
-
-The gate model is a separate layer below the word-level ISA. It must produce the same values as the abstract evaluator and report resources; it need not simulate analog voltage or energy recovery.
-
-### Primitive reversible gates
-
-| Gate | Transformation | Self-inverse |
-|---|---|---|
-| `NOT(a)` | `a := a XOR 1` | yes |
-| `CNOT(a, b)` | `(a, b) := (a, b XOR a)` | yes |
-| `TOFFOLI(a, b, c)` | `(a, b, c) := (a, b, c XOR (a AND b))` | yes |
-| `FREDKIN(c, a, b)` | if `c=1`, exchange `a`, `b` | yes |
-
-Toffoli is computationally universal when initialized constant lines are allowed. Constants and fan-out are not free: a clean `0` ancilla is supplied, copied into using CNOT, and restored to `0` when temporary work is uncomputed.
-
-### Required gate mappings
-
-| ISA operation | Gate-level implementation target |
-|---|---|
-| `XOR rd, rs` | 16 parallel CNOT gates from `rs[i]` to `rd[i]` |
-| `NOT rd` | 16 NOT gates |
-| `SWAP ra, rb` | three CNOTs per bit (`a^=b; b^=a; a^=b`) or equivalent Fredkin construction |
-| `ROL`/`ROR` | renamed/permuted wires; count as zero logical gates |
-| `ADD rd, rs` | 16-bit in-place reversible ripple-carry adder, using a Cuccaro-style MAJ/UMA network |
-| `CADD` | controlled reversible adder; control is never changed, and all temporary carries/ancillas are cleared |
-
-The gate simulator must track:
-
-```ts
-type GateStats = {
-  not: number;
-  cnot: number;
-  toffoli: number;
-  fredkin: number;
-  ancillaAllocated: number;
-  ancillaDirtyAtEnd: number;
-};
-```
-
-`ancillaDirtyAtEnd` must be zero after every completed ALU instruction. The UI should show “garbage ancillas: 0” in green when the invariant holds. A non-zero result is a correctness failure, not merely a performance warning.
-
-### Adder choice
-
-Use a ripple-carry Cuccaro-style adder for the first gate netlist. It has linear gate count and simple, explainable carry propagation. It is slower than a carry-lookahead design, but its regular MAJ/UMA pattern is easier to verify and visualize.
-
-Carry-lookahead and Fourier/quantum adders are rejected for the MVP: they may reduce depth under particular gate models, but add substantial ancilla management and obscure the instructional point. At the word-level ISA, `ADD` remains a single reversible transformation regardless of its selected circuit implementation.
-
-## 10. Bennett uncomputation protocol
-
-Reversibility does not allow arbitrary temporary values to disappear. To calculate a useful irreversible-looking function while returning workspace to zero:
-
-1. Start result and scratch registers in known-clean states.
-2. Compute a reversible transformation, leaving the desired output and some scratch values.
-3. Reversibly copy the desired output into a separate clean output register or output buffer.
-4. Run the computing region backward.
-5. Scratch registers return to their original values, while the copied output remains.
-
-The copy only works because the output destination started at zero, for example `XOR output, result`. The final output is intentionally retained; it is the information not being erased. The demo should visibly show scratch registers becoming zero during the reverse phase.
-
-## 11. UI specification
-
-The interface is a single-page app with no server. It has these panes:
-
-1. **Program pane** — source and expanded instructions; the instruction at `pc` is highlighted.
-2. **State pane** — all eight registers in hexadecimal and decimal, memory watch addresses, and the PC boundary (`0..N`).
-3. **Timeline controls** — Reset, Step forward, Step backward, Run forward, Run backward, and a slider limited to the valid `0..N` boundaries. Scrubbing may repeatedly call step functions; it must not restore snapshots as its primary mechanism.
-4. **Reversibility pane** — selected instruction, inverse instruction, validation status, and log-memory comparison.
-5. **Circuit pane** — optional wire/gate view, per-operation gate counts, and ancilla cleanliness.
-6. **Energy pane** — clearly labelled theoretical lower-bound comparison only.
-
-The UI stores a single current machine state plus the immutable program. It may cache rendered views for performance, but a cache is not used to make reverse execution work.
-
-### Trace rows
-
-Each displayed trace row records presentation data only: instruction index, instruction text, before/after register diff, and inverse mnemonic. It must be possible to disable trace-row retention and still reverse the computation. This visibly distinguishes the machine’s reversibility from a conventional time-travel debugger.
-
-## 12. Conventional baseline and energy display
-
-Implement an optional comparison model, not a competing CPU:
-
-- The reversible execution uses no undo log.
-- The baseline performs the analogous destructive assignments and appends old destination values to an undo log.
-- For fair presentation, show exact bytes retained in the baseline log for the same demo, and zero trace-log bytes in Flip-16.
-
-The energy indicator is educational only:
-
-```text
-minimum erased-bit energy = erasedBits × k × T × ln(2)
-```
-
-At 300 K, `kT ln 2` is approximately `2.87 × 10^-21 J` per erased bit. The display uses 300 K by default, lets the user change `T`, and labels the result **Landauer lower bound, not measured device energy**. Real ordinary chips dissipate vastly more due to switching, leakage, interconnect, clocks, and other losses.
-
-Do not display literal “0 J” for the reversible machine. Display “0 intentionally erased architectural bits in this model”; physical gate operation is not energy-free.
-
-## 13. Demonstration programs
-
-### 13.1 Fibonacci recurrence
-
-Initial state: `r1 = F(n)`, `r2 = F(n+1)`. One iteration is:
+Labels are required only for hybrid branches:
 
 ```asm
-ADD  r2, r1
-SWAP r1, r2
+loop:
+  SHR r1, 1
+  JNZ r1, loop
 ```
 
-The pair becomes `(F(n+1), F(n+2))`. Reversing one step first swaps, then subtracts, restoring the previous pair. The demo is compact and understandable without cryptography.
+A label identifies an instruction boundary, not a mutable memory address. Duplicate labels, undefined labels, and labels pointing inside a macro expansion are compile errors. The compiler SHOULD retain source-line metadata for both the branch and target so the editor can render control flow.
 
-### 13.2 ARX cipher-round demonstration
+### 9.3 Comments, macros, and source locations
 
-Build a clearly labelled toy Speck-style ARX round using `ADD`, `ROR`, `ROL`, and `XOR`. It should not be presented as production cryptography or use an unreviewed cipher as security software. Its purpose is to show that the inverse program is automatically derived: encryption forward and decryption backward use the same instruction listing plus the direction control.
+Comments begin with `#`. The compiler MUST remove comment suffixes before recognising `REPEAT`, labels, or instructions. `REPEAT` counts remain non-negative decimal literals and expand at compile time. The existing implementation does not support nested `REPEAT`; the hybrid compiler MUST either preserve that restriction or implement nesting deliberately with tests.
 
-Use a test vector committed with the source. Verify forward then backward returns the exact key, plaintext/state words, and PC boundary.
+Every expanded instruction MUST retain its one-based original source line. This powers source-editor highlighting and makes log diagnostics useful even when an instruction was produced by a repeated block.
 
-### 13.3 EXCH memory demonstration
+### 9.4 Diagnostics
 
-Initialize `r3 = 0x0042`, `r4 = 0x0010`, and `mem[0x0010] = 0xabcd`:
+Errors MUST identify source line, source text, mode, and reason. Examples:
+
+```text
+strict mode, line 8: MOV r1, r2 — logged instruction is unavailable in strict mode
+hybrid mode, line 13: LOAD r3, [r3] — destination may not overlap address register
+hybrid mode, line 19: JNZ r2, retry — undefined label: retry
+hybrid mode, line 22: SHR r1, 16 — shift amount must be in 0..15
+```
+
+Warnings SHOULD cover no-op logged operations and suspicious log growth, for example `MOV r1, r1`, `AND r2, r2`, and a static loop expansion projected to exceed the configured log limit.
+
+## 10. Numerical and neural-network extensions
+
+### 10.1 Strict accumulator operations
+
+The preferred multiplication primitive is not destructive assignment. It is an accumulator update:
+
+```text
+MULADD rd, ra, rb: rd := rd + (ra * rb mod 2^16)
+MULSUB rd, ra, rb: rd := rd - (ra * rb mod 2^16)
+```
+
+`MULADD` and `MULSUB` are exact inverses when `rd` differs from `ra` and `rb`; `ra == rb` is allowed. The product is computed from preserved sources, while the destination’s old value remains recoverable by subtraction.
+
+For useful fixed-point work, add a 32-bit accumulator pair:
+
+```text
+MULADDW rlo, rhi, ra, rb
+MULSUBW rlo, rhi, ra, rb
+```
+
+Interpret `(rhi:rlo)` as one 32-bit modular accumulator. Both destination registers MUST be distinct from each other and from both source registers. The instruction adds/subtracts the unsigned 32-bit extension of the 16-by-16 product. Signed arithmetic, if added, MUST specify two's-complement interpretation separately.
+
+### 10.2 Strict Boolean/comparison extensions
+
+These are candidates because they toggle a destination rather than overwrite it:
+
+```text
+XORAND rd, ra, rb: rd := rd XOR (ra AND rb)       # word-parallel Toffoli form
+XORLT  rd, ra, rb: rd := rd XOR (ra < rb ? 1 : 0)
+PERM   rd, table:  rd := permutationTable[rd]
+```
+
+`rd` MUST differ from source registers for `XORAND` and `XORLT`. `PERM` is strict only if the selected immutable lookup table is proven to be a permutation of all 65,536 word values and an inverse table is available.
+
+### 10.3 What remains lossy
+
+The following common ML operations are not intrinsically reversible:
+
+- ReLU maps every negative input to zero.
+- Clamping maps a range of values to one endpoint.
+- Quantisation maps many high-precision values to one low-precision value.
+- Average pooling discards inputs.
+- Right shifts discard low bits.
+
+Hybrid mode can make such operations undoable by logging the lost information. Alternatively, use a reversible model family: additive coupling layers, invertible 1x1 transforms, permutations, or normalising flows. The design MUST never label conventional ReLU as a strict reversible instruction.
+
+### 10.4 Worked dot-product region
+
+Assume `r0` is a zeroed accumulator, `r1`/`r2` are inputs, and `r3`/`r4` are weights:
 
 ```asm
-EXCH r3, [r4]
+# Proposed strict extensions.
+MULADD r0, r1, r3
+MULADD r0, r2, r4
 ```
 
-Afterward, `r3 = 0xabcd` and `mem[0x0010] = 0x0042`. Repeating the instruction restores both. This is the clearest proof that “load/store” has been replaced by exchange rather than overwritten memory.
+The result is a modular 16-bit dot product. It needs no undo record. If a reduced-scale output is required, `SHR r0, k` is a hybrid instruction that logs its discarded low bits. A program that needs to preserve only the scaled output may instead copy that output to clean storage and uncompute the prior strict calculation, following Bennett uncomputation.
 
-### 13.4 Bennett uncomputation
+## 11. UI requirements
 
-Use two input registers, a clean scratch register, and a clean output register. Compute a simple reversible intermediate into scratch, XOR it into output, then step the compute region backward. The final state must show input unchanged, scratch zero, and output populated.
+### 11.1 Current strict UI
 
-### 13.5 Failure demonstration
+The current UI contains source editing, Compile, demo selection, state table, execution controls, source-line execution highlighting, register-difference highlighting, timeline scrubbing, and a teaching-oriented information-loss comparison. It intentionally no longer includes a gate-model or dedicated reversibility panel.
 
-The assembler editor includes rejected examples:
+### 11.2 Hybrid UI additions
 
-```asm
-ADD r1, r1     ; rejected: modular doubling is not one-to-one
-XOR r2, r2     ; rejected: destroys r2
-EXCH r3, [r3]  ; rejected: address is overwritten by exchange
-CSWAP r1, r2, r1 ; rejected: control is modified
-```
+The shipped UI exposes:
 
-Showing these failures prevents the project from appearing to rely on a vague definition of “reversible.”
+- A `Strict reversible` / `Hybrid (with undo log)` selector before compile.
+- Current undo-log bytes, capacity, and record count.
+- Hybrid instruction and reverse-branch demos.
+- A disabled scrubber with an explanation when a program contains `JNZ`, because a PC alone cannot name one loop history.
+- Explicit log-overflow errors without a hidden fallback.
 
-## 14. Verification plan
+Useful future refinements are per-line strict/logged decoration, a privacy-safe latest-record inspector, and per-step log-delta text.
 
-### Unit tests
+Timeline scrubbing in hybrid mode MAY replay forward from the initial state rather than store snapshots. It MUST seed the same initial state and reproduce log content deterministically. If a scrub target precedes a discarded checkpoint, it MUST be disabled or clearly marked unavailable.
 
-- Test every opcode on boundary values: `0`, `1`, `0x7fff`, `0x8000`, and `0xffff`.
-- Test rotate amounts `0`, `1`, `15`, `16`, and larger values normalized modulo 16.
-- Test `EXCH` at addresses `0x0000` and `0xffff`.
-- Verify every rejected operand-overlap case produces a readable diagnostic.
-- Verify self-inverse operations applied twice restore state.
+## 12. Testing and verification
 
-### Property tests
+### 12.1 Strict regression suite
 
-Generate legal random instructions, states, and straight-line programs. Clone state including the full memory array before mutation. For each trial, require:
+The strict suite MUST continue unchanged. For random legal strict programs and states:
 
 ```text
 backward(forward(S, P), P) == S
-forward(backward(T, P), P) == T
 forward(inverseProgram(P), forward(P, S)) == S
 ```
 
-The first two comparisons include every register, every memory word, and PC. At least 10,000 random single-instruction cases and 1,000 random multi-instruction programs should run in CI.
+Comparison includes all eight registers, all 65,536 memory words, and PC.
 
-### Gate-model tests
+### 12.2 Logged instruction tests
 
-- Exhaustively test the reversible adder for all 8-bit inputs first (65,536 pairs), then sample at least 100,000 random 16-bit pairs.
-- Compare its result against `(a + b) & 0xffff`.
-- Assert that preserved operand lines are preserved as specified.
-- Assert all ancillas are zero after the gate sequence and after its inverse.
-- Compare each implemented gate-level ISA operation to the word-level evaluator.
+For every logged opcode, test boundary values `0`, `1`, `0x7fff`, `0x8000`, and `0xffff`, relevant alias patterns, and every shift amount `0..15`.
 
-## 15. Architecture alternatives considered
+Examples:
+
+- `MOV`: old destination restored for equal and unequal source/destination values.
+- `LOAD`: old destination restored; memory remains unchanged.
+- `STORE`: old memory restored at address `0x0000` and `0xffff`; source register remains unchanged.
+- `SHR`: exhaustive test over all 16 shift counts and sampled/all word values; reconstructed word equals old word exactly.
+- `SHL`: same reconstruction property.
+- `JNZ`: both taken and fall-through paths restore the exact pre-branch PC and leave the control register unchanged.
+
+### 12.3 Mixed-program property tests
+
+Generate legal hybrid programs containing arbitrary mixtures of strict linear instructions and logged linear operations. Then generate branch-containing programs with bounded control-flow graphs and guaranteed termination. For every execution prefix that does not cross a checkpoint:
+
+```text
+state0 = clone(initial)
+execute k successful forward steps
+execute k backward steps
+assert deepEqual(current, state0)
+assert undoLog is empty
+assert logBytesUsed == 0
+```
+
+For a start state containing a pre-existing log, backward/forward round trips MUST restore the original record sequence byte-for-byte, not merely produce equal register values.
+
+### 12.4 Failure atomicity tests
+
+Deliberately configure a log limit one byte below a record’s required size. Assert that the attempted forward instruction leaves registers, memory, PC, record count, and byte count unchanged. Repeat for malformed records and invalid branch targets.
+
+### 12.5 Differential baseline tests
+
+Implement a simple conventional execution model that performs the same destructive operations and stores old state in an undo log. Its reverse result MUST match hybrid reverse state. Compare log bytes using the canonical accounting table, not JavaScript heap size.
+
+## 13. Alternatives considered
 
 | Alternative | Decision | Reason |
 |---|---|---|
-| Conventional CPU plus undo log | Baseline only | Easy to implement, but storage grows with execution and the CPU itself remains destructive. Useful for a visual comparison. |
-| Inherently reversible ISA | Chosen core | Provides exact inverse execution without an execution log and directly expresses the project’s thesis. |
-| Hybrid reversible core plus Bennett uncomputation | Included as a demo pattern | Necessary for practical cleanup of scratch state, but it is a programming technique rather than the basic ISA. |
-| Pre-build an inverse program | Include as export/test utility | Elegant and useful for tests, but the UI is clearer when it uses one listing and a backward step function. |
-| PC direction bit inside mutable state | Rejected for MVP | Toggling it must itself be made reversible. Keeping direction as stable execution control avoids hiding an irreversible action. |
-| Raw jumps/branches | Deferred | They merge control-flow history; structured reversible control needs extra proof conditions. |
-| Janus-style structured control | Future extension | A principled answer for dynamic control flow once the straight-line model is solid. |
-| Fixed zero register | Rejected | Simpler copying syntax, but muddles the model by adding exceptional non-mutable state. |
-| Load/store memory | Rejected | A store destroys the old memory cell and a load destroys or duplicates information unless additional state is carried. `EXCH` is sufficient and demonstrative. |
-| 32- or 64-bit words | Rejected for MVP | More realistic, but 16-bit visualization and exhaustive reduced-width tests are better for a first implementation. |
-| FPGA implementation | Deferred | An FPGA proves logic behavior but not adiabatic energy recovery; it adds toolchain risk without strengthening the central demo. |
-| Physical adiabatic hardware | Explain only | It is a real research direction but outside hackathon/MVP scope. |
-| Carry-lookahead reversible adder | Rejected for first netlist | Potentially lower depth but materially harder ancilla management and visualization. |
+| Stay completely reversible | Retain as strict mode, not as the only product mode | Best proof and zero-log path, but unnecessarily awkward for destructive numerical/control operations |
+| Conventional CPU plus logger only | Rejected as core | Makes every overwrite pay a log cost and loses the key reversible fast path |
+| Hybrid strict core plus explicit logger | Chosen | Preserves both pedagogical clarity and practical escape hatches |
+| Implicit logger behind existing instructions | Rejected | Hides cost and makes source-level reversibility claims misleading |
+| Record every complete state snapshot | Rejected | Simple but much larger than logging the information actually overwritten |
+| Circular log with silent overwrite | Rejected | Makes backward availability non-obvious and can invalidate debugging unexpectedly |
+| Hardware gate-netlist feature | Deferred/removed from UI | Not required to establish ISA semantics; it distracted from the software-visible trade-off |
+| Raw branches in strict mode | Rejected | Joins lose predecessor information without a structural proof or record |
+| Janus-style structured strict control flow | Future possibility | Principled, but more complex than the logged branch needed for the hybrid MVP |
+| Full destructive `MUL` first | Rejected | `MULADD` provides useful numerical computation while staying strict |
+| Reversible ReLU claim | Rejected | Mathematically false without retaining lost sign/magnitude information |
 
-## 16. Limitations and honest claims
+## 14. Delivery status and next sequence
 
-- Logical reversibility does not mean zero real-world power consumption.
-- A reversible core cannot erase unwanted intermediate information; it must preserve or uncompute it.
-- Uncomputation often roughly doubles the work of a compute region, and clean temporary storage is valuable.
-- I/O, reset, initialization, and observation create an irreversible boundary unless modeled with a larger environment.
-- Straight-line control is intentionally restrictive. General-purpose software needs structured reversible control, additional state, or a conventional irreversible shell.
-- “Same program decrypts backwards” applies to a reversible ARX transformation, not automatically to every encryption scheme or complete protocol.
-- Flip-16 is not intended to outperform x86/ARM on current commodity silicon. Its immediate strengths are reversible-debugging pedagogy, rollback-style computation, and correspondence with reversible/quantum circuit construction.
+Completed in the first hybrid release:
 
-## 17. Delivery plan
+1. Preserved the strict ISA as the zero-log baseline.
+2. Added `CompileMode`, instruction classification, and mode-aware diagnostics.
+3. Added structured undo records, capacity preflight, `logBytesUsed`, and hybrid reverse dispatch.
+4. Added `MOV`, `LOAD`, `STORE`, `SHR`, `SHL`, `AND`, labels, and `JNZ`.
+5. Added browser mode selection, log observability, hybrid demos, and overflow handling.
 
-1. Build `Word` helpers, the typed instruction model, instruction validator, and forward/inverse evaluator.
-2. Add property tests before UI work; do not proceed with an instruction that lacks an inverse test.
-3. Implement parser, literal `REPEAT` expansion, diagnostics, and the Fibonacci/EXCH demos.
-4. Build the browser state/timeline UI and demonstrate reverse execution with trace retention disabled.
-5. Add baseline logging comparison and the carefully labelled Landauer display.
-6. Implement and test the gate netlist for XOR, NOT, SWAP, rotate wiring, then the 16-bit adder.
-7. Add the toy ARX and Bennett demos, record a fallback demo video, and prepare the pitch.
+The next work is `MULADD`/`MULSUB`, 32-bit accumulator support with a fixed-point demo, then explicit irreversible checkpoints only after their truncation semantics and UI warnings are complete.
 
-## 18. Acceptance criteria
+## 15. Acceptance criteria
 
-The MVP is complete when all of the following are true:
+The hybrid architecture is complete only when all of the following hold:
 
-- The assembler rejects every illegal overlap case described in this document.
-- Every supported instruction has a tested exact inverse.
-- A program can run from `pc = 0` to `pc = N` and return to a byte-for-byte identical state at `pc = 0` without using a history log.
-- The UI makes PC boundary semantics and inverse instruction selection visible.
-- `EXCH`, Fibonacci, toy ARX, and Bennett uncomputation demos run deterministically from documented initial states.
-- The conventional comparison reports its undo-log size separately from presentation traces.
-- The gate-level adder agrees with word-level modular addition and returns every ancilla to zero.
-- All energy wording distinguishes logical reversibility, Landauer’s theoretical limit, and real hardware dissipation.
+- Strict programs compile and execute identically to the current implementation.
+- Strict instructions consume exactly zero undo-log bytes.
+- Every logged opcode has a documented payload and passes forward/backward round-trip tests.
+- A full undo log prevents execution atomically rather than corrupting state.
+- Mixed strict/logged programs rewind exactly to their starting architectural state and starting log state.
+- Logged branches restore the correct predecessor PC for both taken and fall-through paths.
+- The UI distinguishes strict work from logged work and reports canonical log-byte usage.
+- Documentation clearly states which instructions are implemented now versus proposed.
+- No energy claim implies that logger-backed execution or browser execution has zero physical cost.
 

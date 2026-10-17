@@ -1,67 +1,6 @@
+import { toString } from './instr.js';
 export function formatInstr(i) {
-    const rdOf = (x) => {
-        switch (x.op) {
-            case 'ADD':
-            case 'SUB':
-            case 'XOR': return x.rd;
-            case 'ADDI':
-            case 'SUBI': return x.rd;
-            case 'NOT':
-            case 'NEG': return x.rd;
-            case 'ROL':
-            case 'ROR': return x.rd;
-            case 'EXCH': return x.rd;
-            case 'CADD':
-            case 'CSUB': return x.rd;
-            default: return null;
-        }
-    };
-    const srcs = (x) => {
-        switch (x.op) {
-            case 'ADD':
-            case 'SUB':
-            case 'XOR': return [x.rs];
-            case 'ADDI':
-            case 'SUBI': return [];
-            case 'NOT':
-            case 'NEG': return [];
-            case 'ROL':
-            case 'ROR': return [];
-            case 'SWAP': return [x.ra, x.rb];
-            case 'EXCH': return [x.ra];
-            case 'CADD':
-            case 'CSUB': return [x.rs, x.rc];
-            case 'CSWAP': return [x.ra, x.rb, x.rc];
-            default: return [];
-        }
-    };
-    const regName = (r) => `r${r}`;
-    switch (i.op) {
-        case 'ADD':
-        case 'SUB':
-        case 'XOR':
-            return `${i.op} ${regName(i.rd)}, ${regName(i.rs)}`;
-        case 'ADDI':
-        case 'SUBI':
-            return `${i.op} ${regName(i.rd)}, ${i.imm}`;
-        case 'NOT':
-        case 'NEG':
-            return `${i.op} ${regName(i.rd)}`;
-        case 'ROL':
-        case 'ROR':
-            return `${i.op} ${regName(i.rd)}, ${i.amount}`;
-        case 'SWAP':
-            return `SWAP ${regName(i.ra)}, ${regName(i.rb)}`;
-        case 'EXCH':
-            return `EXCH ${regName(i.rd)}, [${regName(i.ra)}]`;
-        case 'CADD':
-        case 'CSUB':
-            return `${i.op} ${regName(i.rd)}, ${regName(i.rs)}, ${regName(i.rc)}`;
-        case 'CSWAP':
-            return `CSWAP ${regName(i.ra)}, ${regName(i.rb)}, ${regName(i.rc)}`;
-        default:
-            return '<unknown>';
-    }
+    return toString(i);
 }
 function rdEqRs(i) {
     switch (i.op) {
@@ -108,11 +47,24 @@ function swapIdentity(i) {
     }
     return null;
 }
+function loggedOperandOverlap(i) {
+    if (i.op === 'MOV' && i.rd === i.rs) {
+        return { instruction: formatInstr(i), reason: 'destination equals source; MOV would be a redundant logged no-op' };
+    }
+    if (i.op === 'LOAD' && i.rd === i.ra) {
+        return { instruction: formatInstr(i), reason: 'destination equals address register; preserve the address in another register' };
+    }
+    if ((i.op === 'SHL' || i.op === 'SHR') && (i.amount < 0 || i.amount > 15)) {
+        return { instruction: formatInstr(i), reason: 'shift amount must be in the range 0..15' };
+    }
+    return null;
+}
 const LEGALITY_CHECKS = [
     rdEqRs,
     exchAddressOverlap,
     controlOverlap,
     swapIdentity,
+    loggedOperandOverlap,
 ];
 export function validateInstr(i, line) {
     for (const check of LEGALITY_CHECKS) {

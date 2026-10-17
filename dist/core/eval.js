@@ -1,5 +1,5 @@
 import { add, sub, neg, bitNot, rol, ror } from './word.js';
-import { INVERSE_OP, } from './instr.js';
+import { INVERSE_OP, isStrictInstr, } from './instr.js';
 export class ExecutionError extends Error {
     constructor(pc, instruction, message) {
         super(`pc=${pc} ${instruction}: ${message}`);
@@ -18,6 +18,9 @@ export function stepForward(state, program) {
         throw new ExecutionError(state.pc, '(none)', ERR_AT_END);
     }
     const instr = program[state.pc];
+    if (!isStrictInstr(instr)) {
+        throw new ExecutionError(state.pc, instr.op, 'logged instruction requires the hybrid executor');
+    }
     applyForward(state, instr);
     state.pc += 1;
 }
@@ -29,6 +32,9 @@ export function stepBackward(state, program) {
     }
     state.pc -= 1;
     const instr = program[state.pc];
+    if (!isStrictInstr(instr)) {
+        throw new ExecutionError(state.pc, instr.op, 'logged instruction requires the hybrid executor');
+    }
     const inverseOp = INVERSE_OP[instr.op];
     applyOp(state, { ...instr, op: inverseOp });
 }
@@ -121,6 +127,9 @@ export function runBackward(state, program) {
 /** Build the inverse program: reverse(order) + invert each opcode.
  * Running this forward from the final state of P yields P's initial state. */
 export function makeInverseProgram(program) {
+    if (program.some((i) => !isStrictInstr(i))) {
+        throw new Error('makeInverseProgram only applies to strict instructions');
+    }
     return [...program]
         .reverse()
         .map((i) => ({ ...i, op: INVERSE_OP[i.op] }));

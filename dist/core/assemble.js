@@ -1,154 +1,166 @@
 import { toWord, MAX_WORD } from './word.js';
+import { isLoggedOp } from './instr.js';
 import { validateInstr } from './validate.js';
-/** Remove the assembly-language comment suffix from a source line. */
 function stripComment(text) {
     const hash = text.indexOf('#');
     return hash === -1 ? text : text.slice(0, hash);
 }
-/** Parse a single immediate value. Accepts decimal, hex (0x...), or signed decimal. */
+/** Parse a 16-bit immediate: decimal, hex, or signed decimal. */
 function parseImm(text) {
     const t = text.trim();
     if (t === '')
         return { value: 0, error: 'empty immediate' };
     let sign = 1;
     let body = t;
-    const m = /^([+-])(.+)$/.exec(t);
-    if (m) {
-        sign = m[1] === '+' ? 1 : -1;
-        body = m[2].trim();
+    const signed = /^([+-])(.+)$/.exec(t);
+    if (signed) {
+        sign = signed[1] === '+' ? 1 : -1;
+        body = signed[2].trim();
     }
     let num;
-    if (/^0[xX][0-9a-fA-F]+$/.test(body)) {
+    if (/^0[xX][0-9a-fA-F]+$/.test(body))
         num = parseInt(body.slice(2), 16);
-    }
-    else if (/^\d+$/.test(body)) {
+    else if (/^\d+$/.test(body))
         num = parseInt(body, 10);
-    }
-    else {
+    else
         return { value: 0, error: `invalid immediate: ${text}` };
-    }
-    let value = sign * num;
-    value = toWord(value);
-    if (value > MAX_WORD) {
+    const value = toWord(sign * num);
+    if (value > MAX_WORD)
         return { value: 0, error: `immediate out of range: ${text}` };
-    }
-    return { value: value, error: null };
+    return { value, error: null };
 }
 function parseReg(text) {
-    const t = text.trim().toLowerCase();
-    const m = /^r([0-7])$/.exec(t);
+    const m = /^r([0-7])$/i.exec(text.trim());
     if (!m)
         return { reg: null, error: `invalid register: ${text}` };
     return { reg: Number(m[1]), error: null };
 }
-function parseAmount(text) {
-    const t = text.trim();
-    const n = Number(t);
-    if (!Number.isInteger(n) || n < 0) {
+function parseRotateAmount(text) {
+    const n = Number(text.trim());
+    if (!Number.isInteger(n) || n < 0)
         return { amount: 0, error: `invalid rotation amount: ${text}` };
-    }
     return { amount: n & 15, error: null };
 }
+function parseShiftAmount(text) {
+    const n = Number(text.trim());
+    if (!Number.isInteger(n) || n < 0 || n > 15) {
+        return { amount: 0, error: `shift amount must be an integer in the range 0..15: ${text}` };
+    }
+    return { amount: n, error: null };
+}
+function parseAddress(text, op) {
+    const match = /^\[\s*(r[0-7])\s*\]$/i.exec(text.trim());
+    if (!match)
+        return { reg: null, error: `${op} address must be [rN]` };
+    return parseReg(match[1]);
+}
 export function assemble(source, options = {}) {
+    const mode = options.mode ?? 'strict';
     const maxProgramLength = options.maxProgramLength ?? 0xffff;
     const errors = [];
-    const rawLines = source.split(/\r?\n/);
-    // First pass: expand REPEAT blocks into a flat list of { instruction text, original line }.
-    const expanded = [];
-    let i = 0;
-    while (i < rawLines.length) {
-        const line = rawLines[i];
-        const lineNo = i + 1;
-        const trimmed = stripComment(line).trim();
-        const repeatM = /^REPEAT\s+(\d+)\s*\{\s*$/i.exec(trimmed);
-        if (repeatM) {
-            const count = Number(repeatM[1]);
-            i += 1;
-            const block = [];
-            let depth = 1;
-            while (i < rawLines.length && depth > 0) {
-                const inner = rawLines[i];
-                const innerNo = i + 1;
-                const innerTrimmed = stripComment(inner).trim();
-                if (/^REPEAT\s+\d+\s*\{\s*$/i.test(innerTrimmed)) {
-                    depth += 1;
-                    block.push({ text: inner, line: innerNo });
-                }
-                else if (/^\s*\}\s*$/i.test(innerTrimmed)) {
-                    depth -= 1;
-                    if (depth === 0)
-                        break;
-                    else
-                        block.push({ text: inner, line: innerNo });
-                }
-                else {
-                    block.push({ text: inner, line: innerNo });
-                }
-                i += 1;
+    const expanded = expandRepeats(source, errors);
+    // Labels name instruction boundaries after repeat expansion. Labels may have an
+    // instruction on the same line and may be referenced before their definition.
+    const labels = new Map();
+    const entries = [];
+    for (const item of expanded) {
+        let body = stripComment(item.text).trim();
+        if (body === '')
+            continue;
+        const label = /^([A-Za-z_][A-Za-z0-9_]*):(?:\s*(.*))?$/.exec(body);
+        if (label) {
+            const name = label[1].toLowerCase();
+            if (labels.has(name)) {
+                errors.push({ line: item.line, instruction: body, reason: `duplicate label: ${label[1]}` });
             }
-            if (depth > 0) {
-                errors.push({ line: lineNo, instruction: trimmed, reason: 'unclosed REPEAT block' });
-                i += 1;
+            else {
+                labels.set(name, entries.length);
+            }
+            body = (label[2] ?? '').trim();
+            if (body === '')
                 continue;
-            }
-            for (let rep = 0; rep < count; rep++) {
-                for (const item of block) {
-                    expanded.push(item);
-                }
-            }
-            // Skip the closing brace consumed by the block scanner. Without this,
-            // the outer loop parses it again as an unmatched `}`.
-            i += 1;
         }
-        else if (/^\s*\}\s*$/i.test(trimmed)) {
-            errors.push({ line: lineNo, instruction: trimmed, reason: 'unexpected closing brace outside REPEAT' });
-            i += 1;
-        }
-        else {
-            expanded.push({ text: trimmed, line: lineNo });
-            i += 1;
-        }
+        entries.push({ ...item, instruction: body });
     }
-    // Second pass: parse each expanded line into an instruction.
     const program = [];
     const sourceLines = [];
-    for (const item of expanded) {
-        const parsed = parseLine(item.text, item.line, options.contracts);
+    for (const item of entries) {
+        const parsed = parseLine(item.instruction, item.line, options.contracts, labels, mode);
         if (parsed.error) {
             errors.push(parsed.error);
             continue;
         }
         const instr = parsed.instr;
         if (!instr)
-            continue; // blank line or comment
+            continue;
         const vErr = validateInstr(instr, item.line);
         if (vErr) {
-            errors.push({
-                line: vErr.line ?? item.line,
-                instruction: vErr.instruction,
-                reason: vErr.reason,
-            });
+            errors.push({ line: vErr.line ?? item.line, instruction: vErr.instruction, reason: vErr.reason });
             continue;
         }
         program.push(instr);
         sourceLines.push(item.line);
     }
-    if (program.length > maxProgramLength) {
-        errors.push({
-            line: 0,
-            instruction: '(program)',
-            reason: `expanded program length ${program.length} exceeds limit ${maxProgramLength}`,
-        });
+    if (entries.length > maxProgramLength) {
+        errors.push({ line: 0, instruction: '(program)', reason: `expanded program length ${entries.length} exceeds limit ${maxProgramLength}` });
     }
+    // A branch target is meaningful only for a complete program. Do not expose a
+    // partially assembled program that could make its label PCs inconsistent.
+    const valid = errors.length === 0;
     return {
-        program,
-        sourceLines,
+        program: valid ? program : [],
+        sourceLines: valid ? sourceLines : [],
         errors: errors,
-        expandedLength: program.length,
+        expandedLength: entries.length,
     };
 }
-function parseLine(text, line, contracts) {
-    // Assembly comments begin with `#` and continue to the end of the line.
+function expandRepeats(source, errors) {
+    const rawLines = source.split(/\r?\n/);
+    const expanded = [];
+    let i = 0;
+    while (i < rawLines.length) {
+        const line = rawLines[i];
+        const lineNo = i + 1;
+        const trimmed = stripComment(line).trim();
+        const repeat = /^REPEAT\s+(\d+)\s*\{\s*$/i.exec(trimmed);
+        if (!repeat) {
+            if (/^\}\s*$/.test(trimmed))
+                errors.push({ line: lineNo, instruction: trimmed, reason: 'unexpected closing brace outside REPEAT' });
+            else
+                expanded.push({ text: trimmed, line: lineNo });
+            i += 1;
+            continue;
+        }
+        const count = Number(repeat[1]);
+        const block = [];
+        const openingLine = lineNo;
+        i += 1;
+        let depth = 1;
+        while (i < rawLines.length && depth > 0) {
+            const inner = rawLines[i];
+            const innerTrimmed = stripComment(inner).trim();
+            if (/^REPEAT\s+\d+\s*\{\s*$/i.test(innerTrimmed))
+                depth += 1;
+            else if (/^\}\s*$/.test(innerTrimmed)) {
+                depth -= 1;
+                if (depth === 0) {
+                    i += 1;
+                    break;
+                }
+            }
+            block.push({ text: inner, line: i + 1 });
+            i += 1;
+        }
+        if (depth !== 0) {
+            errors.push({ line: openingLine, instruction: trimmed, reason: 'unclosed REPEAT block' });
+            continue;
+        }
+        for (let n = 0; n < count; n += 1)
+            expanded.push(...block);
+    }
+    return expanded;
+}
+function parseLine(text, line, _contracts, labels, mode) {
     const body = stripComment(text).trim();
     if (body === '')
         return { instr: null, error: null };
@@ -156,27 +168,35 @@ function parseLine(text, line, contracts) {
     if (!opMatch)
         return { instr: null, error: null };
     const op = opMatch[1].toUpperCase();
-    // Operands are comma-separated. Splitting only on whitespace left commas
-    // attached to register names (for example `r2,`), causing valid programs
-    // to be rejected as invalid registers.
-    const args = opMatch[2] === undefined || opMatch[2].trim() === ''
-        ? []
-        : opMatch[2].split(',').map((arg) => arg.trim());
+    const args = opMatch[2] === undefined || opMatch[2].trim() === '' ? [] : opMatch[2].split(',').map((arg) => arg.trim());
     const fail = (reason) => ({ instr: null, error: { line, instruction: text, reason } });
+    const ensureMode = () => isLoggedOp(op) && mode !== 'hybrid'
+        ? fail(`${op} is a logged instruction; select hybrid mode to assemble it`) : null;
+    const readTwoRegs = () => {
+        if (args.length !== 2)
+            return fail(`${op} needs two register operands`);
+        const first = parseReg(args[0]);
+        const second = parseReg(args[1]);
+        if (first.error)
+            return fail(first.error);
+        if (second.error)
+            return fail(second.error);
+        return { first: first.reg, second: second.reg };
+    };
     try {
         switch (op) {
             case 'ADD':
             case 'SUB':
-            case 'XOR': {
-                if (args.length !== 2)
-                    return fail(`${op} needs two register operands`);
-                const rd = parseReg(args[0]);
-                const rs = parseReg(args[1]);
-                if (rd.error)
-                    return fail(rd.error);
-                if (rs.error)
-                    return fail(rs.error);
-                return { instr: { op, rd: rd.reg, rs: rs.reg }, error: null };
+            case 'XOR':
+            case 'MOV':
+            case 'AND': {
+                const blocked = ensureMode();
+                if (blocked)
+                    return blocked;
+                const regs = readTwoRegs();
+                if ('error' in regs)
+                    return regs;
+                return { instr: { op, rd: regs.first, rs: regs.second }, error: null };
             }
             case 'ADDI':
             case 'SUBI': {
@@ -204,37 +224,64 @@ function parseLine(text, line, contracts) {
                 if (args.length !== 2)
                     return fail(`${op} needs a register and an amount`);
                 const rd = parseReg(args[0]);
-                const amt = parseAmount(args[1]);
+                const amount = parseRotateAmount(args[1]);
                 if (rd.error)
                     return fail(rd.error);
-                if (amt.error)
-                    return fail(amt.error);
-                return { instr: { op, rd: rd.reg, amount: amt.amount }, error: null };
+                if (amount.error)
+                    return fail(amount.error);
+                return { instr: { op, rd: rd.reg, amount: amount.amount }, error: null };
+            }
+            case 'SHL':
+            case 'SHR': {
+                const blocked = ensureMode();
+                if (blocked)
+                    return blocked;
+                if (args.length !== 2)
+                    return fail(`${op} needs a register and an amount`);
+                const rd = parseReg(args[0]);
+                const amount = parseShiftAmount(args[1]);
+                if (rd.error)
+                    return fail(rd.error);
+                if (amount.error)
+                    return fail(amount.error);
+                return { instr: { op, rd: rd.reg, amount: amount.amount }, error: null };
             }
             case 'SWAP': {
-                if (args.length !== 2)
-                    return fail('SWAP needs two register operands');
-                const ra = parseReg(args[0]);
-                const rb = parseReg(args[1]);
-                if (ra.error)
-                    return fail(ra.error);
-                if (rb.error)
-                    return fail(rb.error);
-                return { instr: { op: 'SWAP', ra: ra.reg, rb: rb.reg }, error: null };
+                const regs = readTwoRegs();
+                if ('error' in regs)
+                    return regs;
+                return { instr: { op: 'SWAP', ra: regs.first, rb: regs.second }, error: null };
             }
-            case 'EXCH': {
+            case 'EXCH':
+            case 'LOAD': {
+                const blocked = ensureMode();
+                if (blocked)
+                    return blocked;
                 if (args.length !== 2)
-                    return fail('EXCH needs a register and [register]');
+                    return fail(`${op} needs a register and [register]`);
                 const rd = parseReg(args[0]);
-                const m = /^\[(r[0-7])\]$/i.exec(args[1].trim());
-                if (!m)
-                    return fail('EXCH address must be [rN]');
-                const ra = parseReg(m[1]);
-                if (ra.error)
-                    return fail(ra.error);
+                const ra = parseAddress(args[1], op);
                 if (rd.error)
                     return fail(rd.error);
-                return { instr: { op: 'EXCH', rd: rd.reg, ra: ra.reg }, error: null };
+                if (ra.error)
+                    return fail(ra.error);
+                return op === 'EXCH'
+                    ? { instr: { op: 'EXCH', rd: rd.reg, ra: ra.reg }, error: null }
+                    : { instr: { op: 'LOAD', rd: rd.reg, ra: ra.reg }, error: null };
+            }
+            case 'STORE': {
+                const blocked = ensureMode();
+                if (blocked)
+                    return blocked;
+                if (args.length !== 2)
+                    return fail('STORE needs [register] and a register');
+                const ra = parseAddress(args[0], op);
+                const rs = parseReg(args[1]);
+                if (ra.error)
+                    return fail(ra.error);
+                if (rs.error)
+                    return fail(rs.error);
+                return { instr: { op: 'STORE', ra: ra.reg, rs: rs.reg }, error: null };
             }
             case 'CADD':
             case 'CSUB': {
@@ -265,12 +312,28 @@ function parseLine(text, line, contracts) {
                     return fail(rc.error);
                 return { instr: { op: 'CSWAP', ra: ra.reg, rb: rb.reg, rc: rc.reg }, error: null };
             }
-            default:
-                return fail(`unknown instruction: ${op}`);
+            case 'JNZ': {
+                const blocked = ensureMode();
+                if (blocked)
+                    return blocked;
+                if (args.length !== 2)
+                    return fail('JNZ needs a condition register and a label');
+                const rc = parseReg(args[0]);
+                if (rc.error)
+                    return fail(rc.error);
+                const label = args[1].toLowerCase();
+                if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(label))
+                    return fail(`invalid label: ${args[1]}`);
+                const target = labels.get(label);
+                if (target === undefined)
+                    return fail(`unknown label: ${args[1]}`);
+                return { instr: { op: 'JNZ', rc: rc.reg, target, label: args[1] }, error: null };
+            }
+            default: return fail(`unknown instruction: ${op}`);
         }
     }
-    catch (e) {
-        return fail(`parse error: ${String(e)}`);
+    catch (error) {
+        return fail(`parse error: ${String(error)}`);
     }
 }
 //# sourceMappingURL=assemble.js.map
