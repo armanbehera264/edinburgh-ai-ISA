@@ -1,226 +1,181 @@
-## 1. Core idea: the machine state is a bijection
+# Flip-16
 
-Every step must map each possible machine state to exactly one next state, and vice versa. If two different states could lead to the same next state, you can't go back. That's the only rule, and everything below follows from it.
+Flip-16 is a 16-bit teaching processor that can run backward.
 
-A normal `MOV r1, r2` or `r1 = r2 + r3` fails this, because the old value of `r1` is destroyed. So the ISA has to be built from **in-place updates** and **swaps**, never overwrites.
+Its central idea is simple: whenever an instruction keeps enough information to undo itself, Flip-16 reverses it with **no history log at all**. When a normal, destructive instruction is more useful, the proposed hybrid extension records only the information that instruction destroyed and uses that small record to undo it later.
 
-**Option A: record and replay (reversible debugger).** Run a normal CPU and log every overwritten value so you can undo it. This is easy but not really "flipping" anything, and the log grows with runtime. It's worth building anyway as a **baseline to compare against**.
+That gives Flip-16 two complementary paths:
 
-**Option B: inherently reversible ISA (the real flip).** Every instruction has an exact inverse, so no log is needed. This is the recommended core.
-
-**Option C: hybrid.** Use B, plus Bennett's trick for irreversible functions: compute the result, copy it out, then run the computation backwards to erase the scratch work.
-
-My recommendation is B as the core, with A as a comparison toggle ("log memory: 40 KB vs 0 bytes").
-
-## 2. Instruction set
-
-All instructions update `rd` in place. Registers are 8 × 16-bit.
-
-| Instruction | Effect | Inverse |
+| Path | Example | Undo cost |
 |---|---|---|
-| `ADD rd, rs` | rd += rs | `SUB rd, rs` |
-| `ADDI rd, imm` | rd += imm | `SUBI rd, imm` |
-| `XOR rd, rs` | rd ^= rs | itself |
-| `NOT rd` / `NEG rd` | bitwise / two's complement | itself |
-| `ROL rd, k` | rotate left | `ROR rd, k` |
-| `SWAP rd, rs` | exchange registers | itself |
-| `EXCH rd, [ra]` | swap register with memory cell | itself |
-| `CADD rd, rs, rc` | if rc≠0: rd += rs | `CSUB` |
-| `CSWAP ra, rb, rc` | if rc≠0: swap ra, rb | itself |
+| Reversible fast path | `ADD r1, r2`, `XOR r3, r4`, `SWAP r1, r2` | No undo-log storage |
+| Logged escape hatch | `MOV r1, r2`, `STORE [r3], r4`, `SHR r5, 3` | Stores the overwritten or discarded information |
 
-**Rules the assembler must enforce.** These are the traps people hit:
-- `ADD r1, r1` and `XOR r1, r1` are illegal. Doubling loses the top bit, and `r ^= r` always gives 0. Require `rd ≠ rs`.
-- `EXCH r1, [r1]` is illegal. The address register changes mid-instruction, so you can't find the cell again on the way back. Require `rd ≠ ra`.
-- Conditional instructions need the condition register to differ from the registers they modify.
-- Loads and stores don't exist. `EXCH` replaces both, which is a nice talking point.
+This is not a claim that a browser emulator or ordinary CPU consumes no power. Flip-16 demonstrates **logical reversibility**, reversible debugging, and the concrete trade-off between preserving information and recording it.
 
-**Why this ISA is handy.** It's an ARX instruction set (add, rotate, xor), exactly what many ciphers use, plus swaps.
+## What is implemented now
 
-## 3. Program counter and execution
+The browser emulator implements the strict reversible core and the first hybrid logged instruction set:
 
-Make the PC part of the reversible state, and pick one of these:
+- Eight 16-bit general-purpose registers, `r0` through `r7`
+- 65,536 words of 16-bit memory
+- Forward and backward stepping without an execution history log
+- `ADD`, `SUB`, `ADDI`, `SUBI`, `XOR`, `NOT`, `NEG`, `ROL`, `ROR`, `SWAP`, `EXCH`, `CADD`, `CSUB`, and `CSWAP`
+- A source editor, compiler diagnostics, demo selector, execution-line highlight, register-change highlight, and timeline scrubber
+- The Fibonacci, Copy-and-uncompute, hybrid memory, and reverse-branch demos
+- A bounded 64 KiB undo log, assembly-mode selector, labels, and reverse branch tracing
+- Hybrid `MOV`, `LOAD`, `STORE`, `SHR`, `SHL`, `AND`, and `JNZ`
 
-**Option 1: inverse program (most elegant).** Implement only forward execution. To run backwards, build the inverse program by reversing the instruction order and replacing each instruction with its inverse:
+The strict core remains the zero-log reference path; hybrid mode is an explicit opt-in at compile time.
 
-```
-ADD r1, r2        SUB r1, r2   (this is last in inverse)
-ROL r1, 3    →    ROR r1, 3
-XOR r1, r3        XOR r1, r3   (this is first in inverse)
-```
+## Why a hybrid design?
 
-The inverse is `XOR r1,r3 ; ROR r1,3 ; SUB r1,r2`. One emulator handles both directions, and "uncompute" becomes a compile-time transformation.
+A completely reversible ISA is elegant, but certain familiar operations are expensive or inconvenient:
 
-**Option 2: direction bit.** Forward does `exec(prog[pc]); pc++`. Backward does `pc--; exec_inverse(prog[pc])`. This is simple, and it makes scrubbing the timeline slider trivial.
+- `MOV` overwrites a destination.
+- `LOAD` overwrites a register.
+- `STORE` overwrites memory.
+- Shifts throw away bits.
+- General branches merge control-flow paths.
+- Neural-network-style fixed-point code wants multiplication, scaling, comparisons, and many memory accesses.
 
-I'd do Option 2 for the UI and use Option 1 to test it.
+Instead of making every program awkward, Flip-16 keeps the reversible operations cheap and explicit, then permits a small set of logged operations when the programmer decides the convenience is worth the log space.
 
-**Testing trick.** Generate random states and programs and assert `unstep(step(s)) == s`. This single property test catches nearly every bug.
+The right mental model is **not** “partly reversible hardware makes erasure free.” It is:
 
-## 4. Control flow (the hard part)
+> Preserve information when that is naturally cheap. Record it only when a destructive operation is genuinely useful.
 
-A branch destroys information about where you came from, so the join point needs a way to tell which path was taken.
+## A quick example
 
-**Option X: no branches (recommended for the MVP).** Use conditional instructions (`CADD`, `CSWAP`) for if-statements and have the assembler unroll loops (`REPEAT 8 { ... }`). The PC is then always ±1, and nothing can go wrong. Speck-style ciphers, Fibonacci and sorting networks all work this way.
+The built-in Fibonacci demo starts from `r1 = 0` and `r2 = 1`:
 
-**Option Y: structured, Janus-style.**
-- `IF c THEN … ELSE … FI c'`, where `c'` is an assertion that's true only if the THEN branch ran. The condition must not be modified inside the branches.
-- `FROM a DO … LOOP … UNTIL b`, where `a` is true only on first entry. Running it backwards swaps `a` and `b`.
-
-**Option Z: paired branches.** Each jump has a matching landing instruction, and a direction flag lets the landing site send you back. This is how the Pendulum processor did it. It's the most "hardware-like" but fiddly.
-
-I'd do X first and add Y only if time allows.
-
-## 5. The circuitry (gate level)
-
-Normal gates like AND destroy information (two inputs, one output). Reversible gates have as many outputs as inputs:
-
-```
-NOT:      a → ¬a
-CNOT:     (a, b) → (a, b⊕a)              [b ^= a]
-Toffoli:  (a, b, c) → (a, b, c⊕(a∧b))    [CCNOT]
-Fredkin:  (c, a, b) → c ? (c, b, a) : (c, a, b)   [controlled swap]
+```asm
+# Each pair is (F(n), F(n+1)).
+REPEAT 8 {
+  ADD  r1, r2
+  SWAP r1, r2
+}
 ```
 
-Toffoli alone is universal (with constant-0 inputs you get AND, with constant-1 you get NAND, and CNOT onto a 0 gives fan-out/copy).
+After `ADD r1, r2`, the old `r1` can be recovered by subtraction. After `SWAP`, both old values are still present, merely exchanged. The emulator can therefore step backward with no stored trace.
 
-**How each instruction maps to gates:**
-- `XOR rd, rs`: 16 parallel CNOTs.
-- `SWAP`: 3 CNOTs per bit (`a^=b; b^=a; a^=b`), or Fredkin gates with a constant-1 control.
-- `ROL`/`ROR`: pure wiring, **zero gates**. It's a permutation of bit lines.
-- `NOT`: 16 NOT gates.
-- `ADD`: an in-place reversible adder. The Cuccaro ripple-carry adder computes `b = a + b` using about 2n Toffolis and one ancilla bit (a spare line that starts and ends at 0). Look up "Cuccaro adder, MAJ and UMA blocks".
-- `CADD`: compute `tmp = rc ? rs : 0` with Toffolis into zeroed ancillas, add `tmp` into `rd`, then run the first step backwards to clear `tmp`. This is compute, use, uncompute in miniature.
+A hybrid program can use ordinary-looking assignment:
 
-**Ancilla discipline.** Ancilla bits must return to 0 after every instruction. Have the simulator assert this. It makes a great correctness check and a good UI element ("garbage bits: 0 ✓").
-
-**Datapath sketch:**
-
-```
-PC ─► [Program ROM] ─► Decoder ─► opcode, rd, rs, imm
-                                     │
- Register file ◄──────► Reversible ALU (gate netlist)
- (R0..R7)               result written back to *same* register
- Memory ◄─────────────► EXCH port
- PC ± 1 (direction bit)
+```asm
+MOV   r1, r2       # Logger saves old r1.
+SHR   r1, 4        # Logger saves the four discarded low bits.
+STORE [r3], r1     # Logger saves old memory[r3].
 ```
 
-The key difference from a normal CPU is that there's no separate destination and no "write", only in-place update.
+When moving backward, Flip-16 pops those undo records in reverse order and restores the exact old values.
 
-## 6. How deep to go: options
+## Strict mode and hybrid mode
 
-| Level | What you build | Effort | Impact |
-|---|---|---|---|
-| A | ISA emulator + assembler + UI | Low | Good |
-| B | A + gate-level ALU simulation (Toffoli netlist, gate counts, ancilla checks) | Medium | High: this is your "circuitry" |
-| C | B + HDL (Verilog/Amaranth) or Logisim, maybe FPGA | High | Risky |
+### Strict mode
 
-Level C only shows *logical* reversibility. An FPGA still dissipates heat normally, so it doesn't show real energy savings. I'd target **A + B**, and use Logisim Evolution or a generated diagram for a nice visual of one adder.
+Strict mode is the current emulator behavior. Every instruction is a bijection over the machine state. The assembler rejects destructive forms such as `ADD r1, r1`, `XOR r2, r2`, and `EXCH r3, [r3]`.
 
-**Physical implementation (explain, don't build).** Real energy recovery needs **adiabatic logic**, where the power clock ramps slowly and charge flows back to the supply. Dissipation is roughly (RC/T)·CV², so slower means less heat, a speed-versus-energy trade-off. Landauer's limit is kT·ln2 ≈ 2.9×10⁻²¹ J per erased bit at room temperature.
+Use strict mode when you want:
 
-**An energy counter for the UI.** Count bits erased by a conventional version of the same program (each overwrite erases n bits), multiply by kT ln2, and show the running total against zero for the reversible machine. Label it clearly as the *theoretical minimum*. Real chips dissipate orders of magnitude more, and judges will respect you for stating that.
+- A clean proof that a program can run backward without a trace
+- Reversible algorithms, uncomputation, reversible debugging, or ARX-style crypto demonstrations
+- A zero-byte undo-log comparison
 
-## 7. Demos that sell it
+### Hybrid mode
 
-1. **Encrypt forward, decrypt backward.** A Speck-style cipher round is only add, rotate and xor, so the same program run in reverse decrypts. No decrypt code exists. This is probably your best demo.
-2. **Fibonacci.** `ADD a,b ; SWAP a,b` steps forward, and running it backwards counts the sequence down.
-3. **Backwards bug hunt.** Crash the program, then step backwards from the faulty state to find which instruction corrupted it, with no recorded trace.
-4. **Bennett uncompute.** Compute a result, copy it out, un-run, and show the scratch registers returning to zero.
-5. **Log vs no log.** A memory-usage chart of Option A against Option B.
+Hybrid mode accepts the strict instructions unchanged and adds explicitly logged instructions. Each logged instruction is marked in the assembled program and appends an undo record before it changes state.
 
-## 8. Honest limitations (put these in the pitch)
+Select **Hybrid (with undo log)** in the editor, then use hybrid mode when you need:
 
-- Reversible machines can't forget, so intermediate "garbage" must be kept or uncomputed. Uncomputing roughly doubles the time.
-- I/O is inherently irreversible, so treat the program as a pure function from initial state to final state.
-- Reversible doesn't mean free. Running backwards still takes time.
+- Conventional register assignment and memory access
+- Lossy shifts or bitwise operations
+- General conditional branches
+- More direct matrix, fixed-point, or neural-network experiments
 
-## 9. Stack suggestion
+The logger is a stack. A forward logged instruction pushes one record; backward execution pops that exact record. Strict instructions push nothing.
 
-Write the core in **TypeScript** so it runs in the browser. There's no backend, so no API contract to get wrong across your different setups, and deployment is a static page. The interface is tiny:
+## Working with the demo
 
-```ts
-type State = { regs: Uint16Array; mem: Uint16Array; pc: number };
-function step(s: State, prog: Instr[]): State;     // forward
-function unstep(s: State, prog: Instr[]): State;   // backward
+1. Install dependencies once:
+
+   ```powershell
+   npm ci
+   ```
+
+2. Build the TypeScript:
+
+   ```powershell
+   npm run build
+   ```
+
+3. Copy the HTML template into the build output:
+
+   ```powershell
+   Copy-Item src/index.html dist/index.html -Force
+   ```
+
+4. Serve the built page from the project root:
+
+   ```powershell
+   npx --yes serve dist -l 3000
+   ```
+
+5. Open `http://localhost:3000`.
+
+Choose a demo, press **Compile**, and use Step forward or Step backward. The editor highlights the source line most recently executed; the State panel highlights the registers changed by that instruction.
+
+## Writing a strict-mode program
+
+Registers begin at zero for a custom program. `ADDI` changes a known-zero register without an irreversible assignment:
+
+```asm
+# r1 = 10 and r2 = 25 because both start at zero.
+ADDI r1, 10
+ADDI r2, 25
+ADD  r1, r2
 ```
 
-(Python plus a web frontend also works if your team prefers it.)
+`ADDI r1, 10` means “add 10 to the existing value.” It is not a general overwrite. If `r1` was not zero, it becomes its old value plus 10.
 
-**Build order:**
-1. ISA, `step`/`unstep`, and the property test (first 2 hours). Everything depends on this.
-2. Assembler with the legality checks, plus the UI timeline scrubber (parallel).
-3. Gate-level ALU and Toffoli adder, verified against `a+b` for random inputs.
-4. Cipher demo, Fibonacci demo, and the energy counter.
-5. Pitch and a polished demo script, with a fallback recording.
+Use `#` for comments. The full source grammar and strict-mode legality rules live in [syntax.md](syntax.md).
 
-Do you want me to sketch the TypeScript skeleton for the emulator, or the Toffoli netlist for the 16-bit adder? I can also write a worked cipher round in this assembly.
+## The hybrid ISA at a glance
 
+| Instruction | Forward action | Undo information saved |
+|---|---|---|
+| `MOV rd, rs` | `rd := rs` | Previous `rd` word |
+| `LOAD rd, [ra]` | `rd := mem[ra]` | Previous `rd` word |
+| `STORE [ra], rs` | `mem[ra] := rs` | Previous memory word |
+| `SHR rd, k` | Logical right shift | The `k` low bits discarded by the shift |
+| `SHL rd, k` | Logical left shift | The `k` high bits discarded by the shift |
+| `AND rd, rs` | `rd := rd AND rs` | Previous `rd` word |
+| `JNZ rc, label` | Branch when `rc != 0` | The pre-branch PC and chosen successor |
 
-## Where could it beat x86/ARM?
+Each row is reversible **only because the undo record is included in the enlarged hybrid machine state**. The underlying destructive instruction by itself is still not reversible.
 
-**On today's silicon, mostly nowhere.** A normal chip wastes far more energy than the theoretical cost of erasing bits, so a reversible instruction set running on ordinary transistors isn't faster or cheaper per operation. Be honest about that in your pitch. The advantages are in specific niches:
+## Neural-network and numerical work
 
-- **Undo and debugging:** x86/ARM can't rewind without logging every overwritten value, which costs memory and time. Here, rewinding is free, with no log.
-- **Rollback and speculation:** anything that needs to "try something, then undo it" (transactions, speculative execution, simulations) normally needs checkpoints. Reversible code undoes itself.
-- **Quantum computing:** this is the strongest real-world link. Quantum gates are always reversible, so any classical calculation inside a quantum algorithm has to be written in exactly this style (Toffoli and CNOT gates, ancilla bits, uncomputing). Your ISA is basically a classical model of that.
-- **Future low-power hardware:** with adiabatic (energy-recovering) circuits, never erasing information is what lets you reclaim energy instead of turning it into heat. That's a long-term research direction, not something you can buy today.
-- **Encryption:** the same program encrypts going forward and decrypts going backward, so there's half the code to write, store and verify.
-- **Simpler hardware:** instructions update a register in place, rotates are just wires, and there's no separate "destination" or load/store path. The decoder and datapath can be smaller.
+The most valuable future strict extensions are reversible accumulator instructions:
 
-**Where it loses:** you need extra "scratch" registers, uncomputing garbage costs extra time, simple branches and I/O don't fit, and `r1 = r2 + r3` takes more than one instruction because nothing may be overwritten.
-
-## How does the program counter know the order and the reverse?
-
-It doesn't need to be clever. The program is just a list stored in forward order, and the **direction bit** says which way to walk it.
-
-Take this program:
-
-```
-0: ADD r1, r2
-1: ROL r1, 3
-2: XOR r1, r3
+```asm
+# Proposed strict extension; inverse is MULSUB.
+MULADD r0, r1, r3  # r0 := r0 + r1 * r3 (mod 2^16)
 ```
 
-**Going forward:** run the instruction at the PC, then add 1.
-- PC=0: do ADD, PC becomes 1
-- PC=1: do ROL, PC becomes 2
-- PC=2: do XOR, PC becomes 3
+`MULADD` can be reversible because it preserves both inputs and updates an accumulator in place. A 32-bit accumulator pair is recommended for fixed-point work.
 
-**Going backward:** first subtract 1 from the PC, then run the *opposite* of the instruction found there.
-- PC=3 → 2: undo XOR (XOR again)
-- PC=2 → 1: undo ROL (ROR)
-- PC=1 → 0: undo ADD (SUB)
+Ordinary ReLU, quantisation, and right shifts are not reversible: they lose information. Hybrid logging can make them undoable, while reversible neural architectures such as additive coupling layers and invertible permutations can remain on the zero-log path.
 
-So the reversed order comes for free from walking the list backwards. Nobody has to build a reversed program.
+## Honest limits
 
-**How it knows what the opposite is:** a small lookup table in the decoder pairs each instruction with its undo:
+- Running backward takes time; it is not free.
+- Hybrid-mode log use grows with destructive work and can contain sensitive old values.
+- I/O, reset, and interaction with the outside world are irreversible boundaries.
+- A logger makes destructive instructions undoable; it does not make those instructions intrinsically reversible.
+- The current UI’s energy comparison is a teaching estimate based on Landauer’s lower bound, not a power measurement.
 
-| Forward | Undo |
-|---|---|
-| ADD | SUB |
-| ROL | ROR |
-| XOR | XOR (it's its own opposite) |
-| SWAP | SWAP |
+## Documentation map
 
-In hardware, that's just the decoder picking a different opcode when the direction bit is 1.
+- [syntax.md](syntax.md): complete strict and hybrid assembly syntax.
+- [details.md](details.md): hybrid architecture specification, undo-log format, execution algorithms, safety invariants, tests, and future extensions.
 
-**Why the order of "move, then run" differs:** after going forward the PC points at the *next* instruction to run. To undo the one you just did, you first have to step back onto it. That's why forward is "run, then +1" and backward is "−1, then run inverse". It's the same trick as retracing your steps: you walk back to where you were before you can undo what you did there.
-
-This only works cleanly because the PC always moves by exactly 1. Once you add jumps, you need extra rules so the machine can tell which way it came in, which is why I suggested starting with no branches.
-
-If it helps, I can write the pitch line for the "where is it useful" question. Judges like a clear "here's the real use case (quantum, rollback, debugging)" followed by an honest "here's what it doesn't do".
-
-Each problem gets fixed by a design rule, and the assembler enforces them so you can't write a destructive instruction by accident.
-
-| Problem on x86/ARM | How this ISA fixes it |
-|---|---|
-| **`mov` overwrites the old value** | There is no `mov`. You can only update a register using its own old value (`rd += rs`) or swap two registers (`SWAP`). Nothing is ever overwritten, only transformed or exchanged, so the old value can always be recovered. |
-| **`and`, `or`, shifts lose bits** | Those instructions don't exist. Shifts become **rotates**, where bits wrap around instead of falling off. `and`/`or` become **conditional** operations (`CADD`, `CSWAP`) that keep their inputs untouched and put the result into a separate register that started at 0. You also get a copy this way: `XOR` a value into a zeroed register. |
-| **Flags get overwritten as a side effect** | There is no flags register. If a program needs a condition, it is held in an ordinary register that you can see and that the instruction never changes. So there are no hidden side effects. |
-| **Jumps lose where you came from** | For the MVP there are no jumps. The PC only moves ±1, so it is always trivial to retrace. Loops are unrolled by the assembler and if-statements use conditional instructions. If you add real branches later, they need a "this is how you got here" assertion at the join point (the Janus-style `IF … FI` rule). |
-
-**The one rule behind all four:** the assembler rejects any instruction that could lose information, such as `ADD r1, r1` (it doubles and drops the top bit) or `XOR r1, r1` (always gives 0).
-
-**What it costs you:** because nothing can be thrown away, you sometimes end up with leftover "garbage" values, for example the copy you made earlier. Cleaning them up means running that part of the computation backwards (Bennett's trick), which roughly doubles the work for that section. Also, anything that is naturally lossy, like `r1 = r2 + r3` where `r1` already holds something, takes a few more instructions than it would on x86.
-
-For the pitch, you can say "we didn't make normal instructions reversible, we removed every instruction that isn't." Then show a short program running forward and backward to prove it.

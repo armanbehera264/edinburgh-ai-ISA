@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import type { InstrBody } from '../core/index.js';
+import type { StrictInstr } from '../core/index.js';
 import { logBytes } from '../core/index.js';
 import type { Machine } from '../machine/useMachine.js';
 import { glyphFor, registerBytes } from '../programs/cipher.js';
@@ -33,9 +33,9 @@ interface Props {
 /** Both computers on one circuit board, running the same program side by side. */
 export function ChipBoard({ m, narration, caretAt, input }: Props) {
   const dir = m.playing ?? m.direction;
-  const instr = m.lastIndex === null ? null : (m.program[m.lastIndex] as InstrBody);
+  const instr = m.lastIndex === null ? null : (m.program[m.lastIndex] as StrictInstr);
   const normalPc = m.normal.machine.pc;
-  const normalInstr = normalPc > 0 ? (m.program[normalPc - 1] as InstrBody) : null;
+  const normalInstr = normalPc > 0 ? (m.program[normalPc - 1] as StrictInstr) : null;
   // Bits the normal chip will have destroyed by the end of the program.
   const totalBits = m.program.reduce((n, i) => n + (i.op === 'SWAP' || i.op === 'EXCH' ? 32 : 16), 0);
 

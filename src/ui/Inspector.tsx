@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { assemble, INVERSE_OP, toString, type InstrBody } from '../core/index.js';
+import { assemble, INVERSE_OP, toString, type StrictInstr } from '../core/index.js';
 import type { Machine } from '../machine/useMachine.js';
 import { glyphFor } from '../programs/cipher.js';
 import { Close } from './icons.js';
@@ -46,8 +46,8 @@ export function Inspector({ m, source, showAscii = false, onClose }: Props) {
     box.scrollTo({ top, behavior: 'auto' });
   }, [activeLine]);
 
-  const instr = m.lastIndex === null ? null : (m.program[m.lastIndex] as InstrBody);
-  const inverse = instr ? toString({ ...instr, op: INVERSE_OP[instr.op] } as InstrBody) : null;
+  const instr = m.lastIndex === null ? null : (m.program[m.lastIndex] as StrictInstr);
+  const inverse = instr ? toString({ ...instr, op: INVERSE_OP[instr.op] } as StrictInstr) : null;
 
   return (
     <motion.aside
@@ -142,8 +142,8 @@ function Cheat() {
           : e.reason;
       return { ok: false, text: why };
     }
-    const i = r.program[0] as InstrBody;
-    return { ok: true, text: `Its exact opposite is ${toString({ ...i, op: INVERSE_OP[i.op] } as InstrBody)}.` };
+    const i = r.program[0] as StrictInstr;
+    return { ok: true, text: `Its exact opposite is ${toString({ ...i, op: INVERSE_OP[i.op] } as StrictInstr)}.` };
   }, [text]);
 
   return (

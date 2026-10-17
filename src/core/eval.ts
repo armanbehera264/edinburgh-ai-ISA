@@ -1,7 +1,7 @@
 import { Word, add, sub, neg, bitNot, rol, ror } from './word.js';
 import { State, newState } from './state.js';
 import {
-  InstrBody, Instr, Op, INVERSE_OP,
+  InstrBody, Instr, StrictInstr, INVERSE_OP, isStrictInstr,
   InstrADD, InstrSUB, InstrADDI, InstrSUBI, InstrXOR,
   InstrNOT, InstrNEG, InstrROL, InstrROR, InstrSWAP, InstrEXCH,
   InstrCADD, InstrCSUB, InstrCSWAP,
@@ -34,6 +34,9 @@ export function stepForward(state: State, program: readonly Instr[]): void {
     throw new ExecutionError(state.pc, '(none)', ERR_AT_END);
   }
   const instr = program[state.pc] as InstrBody;
+  if (!isStrictInstr(instr)) {
+    throw new ExecutionError(state.pc, instr.op, 'logged instruction requires the hybrid executor');
+  }
   applyForward(state, instr);
   state.pc += 1;
 }
@@ -46,17 +49,20 @@ export function stepBackward(state: State, program: readonly Instr[]): void {
   }
   state.pc -= 1;
   const instr = program[state.pc] as InstrBody;
+  if (!isStrictInstr(instr)) {
+    throw new ExecutionError(state.pc, instr.op, 'logged instruction requires the hybrid executor');
+  }
   const inverseOp = INVERSE_OP[instr.op];
-  applyOp(state, { ...instr, op: inverseOp } as InstrBody);
+  applyOp(state, { ...instr, op: inverseOp } as StrictInstr);
 }
 
 /** Apply one forward instruction in place without touching pc. */
-export function applyForward(state: State, instr: InstrBody): void {
+export function applyForward(state: State, instr: StrictInstr): void {
   applyOp(state, instr);
 }
 
 /** Apply one instruction (already possibly inverted) in place. */
-export function applyOp(state: State, instr: InstrBody): void {
+export function applyOp(state: State, instr: StrictInstr): void {
   switch (instr.op) {
     case 'ADD':
       state.regs[instr.rd] = add(state.regs[instr.rd], state.regs[instr.rs]);
@@ -146,9 +152,12 @@ export function runBackward(state: State, program: readonly Instr[]): State {
 /** Build the inverse program: reverse(order) + invert each opcode.
  * Running this forward from the final state of P yields P's initial state. */
 export function makeInverseProgram(program: readonly Instr[]): Instr[] {
+  if (program.some((i) => !isStrictInstr(i))) {
+    throw new Error('makeInverseProgram only applies to strict instructions');
+  }
   return [...program]
     .reverse()
-    .map((i) => ({ ...i, op: INVERSE_OP[i.op] }) as Instr);
+    .map((i) => ({ ...i, op: INVERSE_OP[(i as StrictInstr).op] }) as Instr);
 }
 
 /** Execute the whole program forward, returning a new state (input not mutated). */

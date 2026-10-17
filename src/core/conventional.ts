@@ -10,7 +10,7 @@
  */
 
 import type { Word } from './word.js';
-import type { InstrBody } from './instr.js';
+import { isStrictInstr, type Instr, type StrictInstr } from './instr.js';
 import { State, cloneState } from './state.js';
 import { applyOp } from './eval.js';
 
@@ -35,7 +35,7 @@ export function newConventional(initial: State, logging: boolean): ConventionalS
 }
 
 /** Storage locations an instruction overwrites on an ordinary CPU, given the current state. */
-export function writesOf(s: State, i: InstrBody): Slot[] {
+export function writesOf(s: State, i: StrictInstr): Slot[] {
   switch (i.op) {
     case 'SWAP':
       return [{ kind: 'reg', index: i.ra }, { kind: 'reg', index: i.rb }];
@@ -52,10 +52,12 @@ export function writesOf(s: State, i: InstrBody): Slot[] {
 
 const read = (s: State, slot: Slot): Word => (slot.kind === 'reg' ? s.regs[slot.index] : s.mem[slot.index]);
 
-export function conventionalForward(c: ConventionalState, program: readonly InstrBody[]): void {
+export function conventionalForward(c: ConventionalState, program: readonly Instr[]): void {
   const m = c.machine;
   if (m.pc >= program.length) return;
   const instr = program[m.pc];
+  // The comparison only models the strict instruction set our programs use.
+  if (!isStrictInstr(instr)) throw new Error(`${instr.op} is not modelled by the comparison machine`);
   const slots = writesOf(m, instr);
   if (c.log) c.log.push(slots.map((slot) => ({ slot, old: read(m, slot) })));
   applyOp(m, instr);

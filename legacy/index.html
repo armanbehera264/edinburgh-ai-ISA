@@ -103,9 +103,9 @@
   <div style="display:flex;align-items:center;gap:0.5rem;">
     <h1><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:block;"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
     Flip-16</h1>
-    <span class="tag">Logically reversible ISA</span>
+    <span class="tag">Reversible + logged ISA</span>
     <span class="tag">No backend — static TypeScript</span>
-    <span class="tag">No undo log</span>
+    <span class="tag">Bounded undo log</span>
   </div>
   <div class="toolbar" aria-label="Execution controls" style="margin:0 0 0 auto;">
     <button id="btn-compile" class="primary">Compile</button>
@@ -125,7 +125,14 @@
         <select id="demo-select" aria-label="Choose a demo">
           <option value="fibonacci">Fibonacci sequence</option>
           <option value="copy">Copy and uncompute</option>
+          <option value="hybrid">Hybrid overwrite and memory</option>
+          <option value="branch">Hybrid branch and reverse</option>
           <option value="custom">Custom program</option>
+        </select>
+        <label for="compile-mode">Mode</label>
+        <select id="compile-mode" aria-label="Assembly mode">
+          <option value="strict">Strict reversible</option>
+          <option value="hybrid">Hybrid (with undo log)</option>
         </select>
       </div>
       <div class="editor-wrap">
@@ -150,13 +157,11 @@ REPEAT 8 {
         <input id="scrub" type="range" min="0" max="0" value="0" style="width:14rem;" />
         <span id="scrub-val">0</span>
       </div>
-      <div style="margin-top:0.4rem;font-size:0.74rem;color:var(--muted);">
-        Choose the boundary before instruction 0 through the completed boundary N. The machine is reset and replayed to that point.
-      </div>
+      <div id="scrub-note" style="margin-top:0.4rem;font-size:0.74rem;color:var(--muted);"></div>
       <div class="status-row">
         <span>Steps: <b id="steps">0</b></span>
-        <span>Log memory (baseline): <b id="logbytes">0</b> bytes</span>
-        <span>Flip-16 log: <b id="flip16log">0</b> bytes</span>
+        <span>Undo log: <b id="logbytes">0 / 65536</b> bytes</span>
+        <span>Undo records: <b id="log-records">0</b></span>
       </div>
     </div>
 
@@ -182,25 +187,24 @@ REPEAT 8 {
     </div>
 
     <div class="card">
-      <h2><span class="dot"></span>Information-loss comparison</h2>
+      <h2><span class="dot"></span>Reversibility and logging</h2>
       <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.4rem;">
-        A conventional machine overwrites state. Flip-16 transforms it so it can be recovered.
+        Strict instructions are inverted algebraically. Hybrid instructions keep exactly the overwritten information in a bounded undo log.
       </div>
       <div style="font-size:0.82rem;">
-        <div>At this execution position: <b id="energy-steps">0</b> instructions</div>
-        <div style="margin-top:0.35rem;">Conventional baseline: <b id="erased">0 bits</b> of information overwritten</div>
-        <div>Flip-16 model: <b style="color:var(--ok);">0 intentional bit erasures</b></div>
-        <div style="margin-top:0.6rem;">Theoretical minimum heat avoided: <b id="energy">0 J</b></div>
+        <div>UI step actions: <b id="energy-steps">0</b></div>
+        <div style="margin-top:0.35rem;">Undo information available: <b id="erased">0 bits retained</b></div>
+        <div>Architectural information discarded: <b style="color:var(--ok);">0 bits</b></div>
+        <div style="margin-top:0.6rem;">Landauer lower bound represented by current log: <b id="energy">0 J</b></div>
       </div>
       <div style="margin-top:0.5rem;font-size:0.74rem;color:var(--muted);">
-        This is a teaching comparison at 300 K: one destructive 16-bit write per executed instruction.<br>
-        It is Landauer's theoretical lower bound, not a measurement of this browser or computer's electricity use.
+        This is an educational accounting view at 300 K. It is not a measurement of browser or computer electricity use.
       </div>
     </div>
   </aside>
 </main>
 <footer>
-  Flip-16 — Logical reversibility demo. Physical energy recovery would require adiabatic circuits; this emulator shows logical reversibility, not device energy savings.
+  Flip-16 — strict reversible execution plus a bounded-log hybrid mode. Physical energy recovery would require adiabatic circuits; this emulator models architectural reversibility only.
 </footer>
 <script type="module" src="ui.js"></script>
 </body>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { INVERSE_OP, type InstrBody } from '../core/index.js';
+import { INVERSE_OP, type StrictInstr } from '../core/index.js';
 import type { Direction } from '../machine/useMachine.js';
 
 /** A processor drawn as hardware: 8 registers of 16 bit-lights each, wired
@@ -31,7 +31,7 @@ function route(from: number, to: number): string {
   return `M${ROW_END},${ys} H${BUS_IN} V${ALU_IN_Y} H${ALU.x + ALU.w / 2} V${ALU_OUT_Y} H${BUS_OUT} V${yd} H${ROW_END}`;
 }
 
-function routesFor(i: InstrBody): string[] {
+function routesFor(i: StrictInstr): string[] {
   switch (i.op) {
     case 'ADD': case 'SUB': case 'XOR': return [route(i.rs, i.rd)];
     case 'CADD': case 'CSUB': return [route(i.rs, i.rd)];
@@ -48,7 +48,7 @@ interface Props {
   regs: Uint16Array;
   hot: ReadonlySet<number>;
   /** The instruction that just ran (or was just undone), if any. */
-  instr: InstrBody | null;
+  instr: StrictInstr | null;
   /** Changes every step so the pulse animation restarts. */
   stepKey: string;
   direction: Direction;
@@ -93,7 +93,7 @@ export function ChipSvg({ variant, regs, hot, instr, stepKey, direction, heat = 
     return () => clearTimeout(t);
   }, [sparks]);
 
-  const shown = instr && (direction === 'backward' && !normal ? { ...instr, op: INVERSE_OP[instr.op] } as InstrBody : instr);
+  const shown = instr && (direction === 'backward' && !normal ? { ...instr, op: INVERSE_OP[instr.op] } as StrictInstr : instr);
   const routes = instr ? routesFor(instr) : [];
   const backward = direction === 'backward' && !normal;
 
