@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { assemble, INVERSE_OP, toString, type StrictInstr } from '../core/index.js';
+import { assemble, INVERSE_OP, isStrictInstr, toString, type Instr, type StrictInstr } from '../core/index.js';
 import type { Machine } from '../machine/useMachine.js';
 import { glyphFor } from '../programs/cipher.js';
 import { Close } from './icons.js';
@@ -46,8 +46,9 @@ export function Inspector({ m, source, showAscii = false, onClose }: Props) {
     box.scrollTo({ top, behavior: 'auto' });
   }, [activeLine]);
 
-  const instr = m.lastIndex === null ? null : (m.program[m.lastIndex] as StrictInstr);
-  const inverse = instr ? toString({ ...instr, op: INVERSE_OP[instr.op] } as StrictInstr) : null;
+  const instr = m.lastIndex === null ? null : (m.program[m.lastIndex] as Instr);
+  const logged = instr !== null && !isStrictInstr(instr);
+  const inverse = instr && !logged ? toString({ ...instr, op: INVERSE_OP[(instr as StrictInstr).op] } as StrictInstr) : null;
 
   return (
     <motion.aside
@@ -66,7 +67,15 @@ export function Inspector({ m, source, showAscii = false, onClose }: Props) {
         <div className="now">
           {instr ? (
             m.direction === 'forward' ? (
-              <div className="row"><span className="arrow">▶</span>{toString(instr)}</div>
+              <>
+                <div className="row"><span className="arrow">▶</span>{toString(instr)}</div>
+                {logged && <div className="muted" style={{ marginTop: 4, color: 'var(--loss)' }}>ordinary instruction: what it destroyed was saved to the undo log</div>}
+              </>
+            ) : logged ? (
+              <>
+                <div className="row"><span className="arrow">◀</span>{toString(instr)}</div>
+                <div className="muted" style={{ marginTop: 4, color: 'var(--loss)' }}>no exact opposite exists, so it was restored from the undo log</div>
+              </>
             ) : (
               <>
                 <div className="row"><span className="arrow">◀</span>{inverse}</div>
@@ -120,7 +129,7 @@ export function Inspector({ m, source, showAscii = false, onClose }: Props) {
 
         <p className="honest">
           Going backwards uses only the current registers and the program text: no log, no snapshots.
-          The heat figures are Landauer's theoretical minimum at room temperature (kT·ln 2 ≈ 2.9×10⁻²¹ J per erased bit),
+          The ordinary CPU's heat gauge is illustrative,
           not a measurement of any real chip.
         </p>
       </div>

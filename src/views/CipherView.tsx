@@ -1,30 +1,23 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { useMachine } from '../machine/useMachine.js';
 import {
-  CIPHER_SOURCE, ROUNDS, MESSAGE_LENGTH, decodeMessage, encodeMessage, registerBytes, sanitizeMessage,
+  CIPHER_SOURCE, ROUNDS, MESSAGE_LENGTH, decodeMessage, encodeMessage, sanitizeMessage,
 } from '../programs/cipher.js';
-import { Tiles } from '../ui/Tiles.js';
-import { OursLane, NormalLane } from '../ui/Lane.js';
+import { ChipBoard } from '../ui/ChipBoard.js';
 import { Dock } from '../ui/Dock.js';
 import { Inspector } from '../ui/Inspector.js';
-import { AnimatePresence } from 'motion/react';
-import { Hero, RestoredBanner, Stagger, useAmbience } from './shared.js';
-import { ChipBoard } from '../ui/ChipBoard.js';
+import { Hero, RestoredBanner, useAmbience } from './shared.js';
 
 const STEPS_PER_ROUND = 24;
 
-// The 3D scene only downloads when someone switches it on.
-const OursScene = lazy(() => import('../three/Scene3D.js').then((mod) => ({ default: mod.OursScene })));
-const NormalScene = lazy(() => import('../three/Scene3D.js').then((mod) => ({ default: mod.NormalScene })));
-
-export type ViewMode = 'tiles' | 'chip' | '3d';
+export type ViewMode = 'chip' | '3d';
 
 export function CipherView({ inspector, closeInspector, view }: { inspector: boolean; closeInspector(): void; view: ViewMode }) {
-  const threeD = view === '3d';
-  const m = useMachine(CIPHER_SOURCE, () => encodeMessage('MEET ME AT NOON'), 30);
+  const m = useMachine(CIPHER_SOURCE, () => encodeMessage('THIS IS TENET'), { stepsPerSecond: 30 });
   useAmbience(m);
 
-  // While editing, the text box shows the registers. Its own copy is dropped
+  // While editing, the text box mirrors the registers. Its own copy is dropped
   // the moment the program starts: from then on the message exists only in
   // the scrambled registers.
   const [draft, setDraft] = useState<string | null>(null);
@@ -37,21 +30,21 @@ export function CipherView({ inspector, closeInspector, view }: { inspector: boo
   const caretAt = editable && focused ? Math.min(text.length, MESSAGE_LENGTH - 1) : null;
 
   const narration = {
-    start: <>Type a secret message, then press <b>play</b>.</>,
+    start: <>Type a message into U1, then press <b>play</b>.</>,
     forward: <>Scrambling. Every step can be undone.</>,
     paused: <>Step {m.pc} of {m.length}. Drag the timeline either way.</>,
     end: <>Scrambled. Now <b>drag the timeline back</b>.</>,
-    backward: <>Running time backwards…</>,
+    backward: <>Running time backwards.</>,
     restored: <>Your message is back. <b>Nothing was saved</b> to make that possible.</>,
   }[m.phase];
 
-  const marks = Array.from({ length: ROUNDS }, (_, r) => ({ at: r * STEPS_PER_ROUND, label: `Round ${r + 1}` }))
+  const marks = Array.from({ length: ROUNDS }, (_, r) => ({ at: r * STEPS_PER_ROUND, label: `round ${r + 1}` }))
     .concat([{ at: m.length, label: '' }]);
 
   const messageInput = (
     <input
       ref={inputRef}
-      className="tiles-input"
+      className="text-input"
       value={text}
       maxLength={MESSAGE_LENGTH}
       disabled={!editable}
@@ -74,80 +67,25 @@ export function CipherView({ inspector, closeInspector, view }: { inspector: boo
       <div className={`stage${inspector ? ' with-inspector' : ''}`}>
         <div className="stage-inner">
           <Hero
-            eyebrow="A computer with no delete button"
-            title={<><span className="soft">Every computer deletes things.</span> <span className="accent">This one can't.</span></>}
-          >
-            Scramble a secret, then drag time backwards. No decryption program, no saved history: every step just runs in reverse.
-          </Hero>
-
-          {view === 'chip' ? (
-            <Stagger delay={0.1}>
-              <ChipBoard m={m} narration={narration} caretAt={caretAt} input={messageInput} />
-            </Stagger>
-          ) : (
-            <>
-            <Stagger delay={0.1}>
-              <OursLane m={m} narration={narration}>
-                <div style={{ position: 'relative' }} onClick={() => inputRef.current?.focus()}>
-                  {(() => {
-                    const flat = (
-                      <Tiles
-                        bytes={registerBytes(m.state.regs)}
-                        size="big"
-                        hotRegs={m.changed}
-                        direction={m.playing ?? m.direction}
-                        scrambled={m.pc > 0}
-                        caretAt={caretAt}
-                        labels
-                      />
-                    );
-                    if (!threeD) return flat;
-                    return (
-                      <Suspense fallback={flat}>
-                        <OursScene
-                          bytes={registerBytes(m.state.regs)}
-                          hotRegs={m.changed}
-                          scrambled={m.pc > 0}
-                          direction={m.playing ?? m.direction}
-                          playing={m.playing !== null}
-                          phase={m.phase}
-                        />
-                      </Suspense>
-                    );
-                  })()}
-                  {messageInput}
-                </div>
-              </OursLane>
-            </Stagger>
-
-            <Stagger delay={0.2}>
-              <NormalLane m={m}>
-                {(() => {
-                  const flat = (
-                    <Tiles
-                      bytes={registerBytes(m.normal.machine.regs)}
-                      size="small"
-                      direction="forward"
-                      scrambled={m.normal.machine.pc > 0}
-                      dead={m.normalStuck}
-                    />
-                  );
-                  if (!threeD) return flat;
-                  return (
-                    <Suspense fallback={flat}>
-                      <NormalScene
-                        bytes={registerBytes(m.normal.machine.regs)}
-                        pc={m.normal.machine.pc}
-                        scrambled={m.normal.machine.pc > 0}
-                        stuck={m.normalStuck}
-                      />
-                    </Suspense>
-                  );
-                })()}
-              </NormalLane>
-            </Stagger>
-            </>
-          )}
+            eyebrow="Flip the Script"
+            title={<><span className="soft">Computers only run forwards.</span> <span className="accent">TENET runs in reverse.</span></>}
+          />
+          <div className="flip-strip">
+            <div>
+              <span className="label"><i />The assumption</span>
+              <p>A computer only moves forwards. Every step <b>overwrites and destroys</b> old values, billions of times a second, so there is no way back.</p>
+            </div>
+            <div className="flip">
+              <span className="label"><i />The flip</span>
+              <p>Every TENET instruction has an <b>exact opposite</b>. Nothing is ever destroyed, so any program can run backwards to its exact start, <b>with zero saved history</b>.</p>
+            </div>
+            <div className="why">
+              <span className="label"><i />Why it matters</span>
+              <p>Physics puts a <b>minimum energy cost</b> on destroying information. A computer that never destroys anything is the route to near-zero-energy chips, and quantum computers already work this way.</p>
+            </div>
+          </div>
+          <div style={{ height: 10 }} />
+          <ChipBoard m={m} view={view} narration={narration} caretAt={caretAt} input={messageInput} />
         </div>
       </div>
 
@@ -155,7 +93,7 @@ export function CipherView({ inspector, closeInspector, view }: { inspector: boo
         Restored exactly <small>0 bytes of history used</small>
       </RestoredBanner>
 
-      <Dock m={m} marks={marks} startLabel="Your message" endLabel="Scrambled" inspectorOpen={inspector} />
+      <Dock m={m} marks={marks} startLabel="your message" endLabel="scrambled" inspectorOpen={inspector} />
       <AnimatePresence>
         {inspector && <Inspector m={m} source={CIPHER_SOURCE} showAscii onClose={closeInspector} />}
       </AnimatePresence>

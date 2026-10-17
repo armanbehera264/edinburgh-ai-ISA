@@ -1,25 +1,19 @@
 import { motion } from 'motion/react';
 import { Close } from './icons.js';
 
-/** "What's real, what's theoretical, what's cached." Always one click away,
- * because being honest about limits is part of the pitch. */
+/** What's real, what's theoretical, what's simplified. Always one click away,
+ * because knowing the limits is part of the pitch. */
 export function Limits({ onClose }: { onClose(): void }) {
   return (
-    <motion.div
-      className="limits-scrim"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      onClick={onClose}
-    >
+    <motion.div className="limits-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
       <motion.aside
         className="limits"
         role="dialog"
         aria-label="Limits and honesty notes"
-        initial={{ opacity: 0, y: 16, scale: 0.97 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 10, scale: 0.98 }}
-        transition={{ type: 'spring', bounce: 0.15, duration: 0.4 }}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 6 }}
+        transition={{ type: 'spring', bounce: 0, duration: 0.3 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="inspector-head" style={{ padding: '0 0 6px' }}>
@@ -29,38 +23,38 @@ export function Limits({ onClose }: { onClose(): void }) {
 
         <div className="limit-grid">
           <section>
-            <span className="chip ok">Real</span>
+            <h4 className="real">Real</h4>
             <ul>
               <li>Every step really runs backwards. Rewinding executes the exact inverse instruction using only the current registers and the program. No log, no snapshots, no replay from the start.</li>
-              <li>Illegal "delete" instructions (MOV, XOR r1,r1, ADD r1,r1) are refused by the assembler.</li>
-              <li>28 automated tests (<code>npm test</code>), including 5,000 random instructions and 500 random programs that all rewind to the exact starting state.</li>
+              <li>Instructions that would destroy information (MOV, XOR r1,r1, ADD r1,r1) are refused by the assembler in reversible mode.</li>
+              <li>Automated tests (<code>npm test</code>): 5,000 random instructions and 500 random programs all rewind to the exact starting state.</li>
             </ul>
           </section>
 
           <section>
-            <span className="chip dir">Theoretical</span>
+            <h4 className="theory">Theoretical</h4>
             <ul>
-              <li>The heat figures use Landauer's limit: the minimum energy needed to erase one bit, kT·ln 2 ≈ 2.9×10⁻²¹ J at room temperature. It's a physical floor, not a measurement. Real chips use far more energy than this per operation.</li>
-              <li>This is a simulation running on an ordinary laptop, which itself erases bits all the time. We show logical reversibility. Saving the energy would need reversible (adiabatic) hardware.</li>
-              <li>The "normal computer" is a model: the same program, charged 16 bits destroyed for every register it overwrites.</li>
+              <li>The heat gauge on the ordinary CPU is illustrative, not a measurement of real chip energy.</li>
+              <li>This is a simulation on an ordinary laptop, which itself erases bits constantly. It shows logical reversibility; saving the energy would need reversible (adiabatic) hardware.</li>
+              <li>The ordinary CPU is a model: the same program, charged 16 bits destroyed for every register it overwrites.</li>
             </ul>
           </section>
 
           <section>
-            <span className="chip">Cached or simplified</span>
+            <h4 className="simple">Simplified</h4>
             <ul>
-              <li>The Claude compiler can use programs Claude wrote earlier, so the demo works offline. Saved programs are marked "Saved program from Claude" and are re-checked live every time.</li>
-              <li>"Verified" means correct on 20 test inputs (including 0 and 65535), scratch registers clean, and an exact rewind. That's thorough testing, not a formal proof.</li>
-              <li>The secret-message cipher is a toy, not real encryption.</li>
-              <li>No loops or branches that depend on data yet: REPEAT counts are fixed. Reversible IF/FI with exit assertions (like the Janus language) is the next step.</li>
+              <li>The message scrambler is a toy, not real encryption.</li>
+              <li>Reversible programs have no data-dependent loops yet: REPEAT counts are fixed.</li>
+              <li>Hybrid mode (Playground) allows ordinary instructions and real loops, but those are undone from an undo log, so it does store history and shows exactly how much.</li>
             </ul>
           </section>
 
           <section>
-            <span className="chip">Built with</span>
+            <h4 className="built">Built with</h4>
             <ul>
-              <li>TypeScript VM (Armaan's core, unit-tested) · React + Motion for the UI · React Three Fiber for the optional 3D mode · Vite.</li>
-              <li>Claude (Opus 5.5) is the in-app compiler. We also used Claude Code to help build the app.</li>
+              <li>A TypeScript virtual machine with a strict reversible mode and a logged hybrid mode, unit-tested with Vitest.</li>
+              <li>React and Motion for the interface, SVG for the chip view, React Three Fiber (three.js) for the 3D board, Vite to build.</li>
+              <li>We used Claude Code (Anthropic) as a coding assistant while building it.</li>
             </ul>
           </section>
         </div>

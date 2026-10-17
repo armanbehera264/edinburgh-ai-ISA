@@ -55,13 +55,18 @@ export function Dock({ m, marks, startLabel, endLabel, inspectorOpen }: Props) {
           </button>
         </div>
         <div className="dock-meta">
-          <span className="big">Step {m.pc} <span style={{ color: 'var(--text-3)' }}>of {m.length}</span></span>
-          <span className="small">{m.playing ? <span className="dir" style={{ color: 'var(--dir)' }}>Running {dirWord.toLowerCase()}</span> : 'Drag the timeline either way'}</span>
+          <span className="big">{String(m.pc).padStart(String(m.length).length, '0')} <span className="of">/ {m.length}</span></span>
+          <span className="small">{m.playing ? <span className="dir">running {dirWord.toLowerCase()}</span> : 'drag the timeline either way'}</span>
         </div>
         <div className="dock-right">
-          <div className="history-pill" title="This machine keeps no log of past states. Going backwards uses only the current state and the program.">
-            <span className="k">History stored</span>
-            <span className="v">0 bytes</span>
+          <div
+            className={`history${m.historyBytes > 0 ? ' costly' : ''}`}
+            title={m.historyBytes > 0
+              ? 'Ordinary instructions saved what they destroyed to an undo log.'
+              : 'No log of past states. Going backwards uses only the current state and the program.'}
+          >
+            <span className="silk">History stored</span>
+            <span className="v">{m.historyBytes.toLocaleString()} B</span>
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { INVERSE_OP, type StrictInstr } from '../core/index.js';
+import { INVERSE_OP, isStrictInstr, type Instr, type StrictInstr } from '../core/index.js';
 import type { Direction } from '../machine/useMachine.js';
 
 /** A processor drawn as hardware: 8 registers of 16 bit-lights each, wired
@@ -31,9 +31,12 @@ function route(from: number, to: number): string {
   return `M${ROW_END},${ys} H${BUS_IN} V${ALU_IN_Y} H${ALU.x + ALU.w / 2} V${ALU_OUT_Y} H${BUS_OUT} V${yd} H${ROW_END}`;
 }
 
-function routesFor(i: StrictInstr): string[] {
+function routesFor(i: Instr): string[] {
   switch (i.op) {
     case 'ADD': case 'SUB': case 'XOR': return [route(i.rs, i.rd)];
+    case 'MOV': case 'AND': return [route(i.rs, i.rd)];
+    case 'STORE': return [route(i.rs, i.rs)];
+    case 'JNZ': return [route(i.rc, i.rc)];
     case 'CADD': case 'CSUB': return [route(i.rs, i.rd)];
     case 'SWAP': case 'CSWAP': return [route(i.ra, i.rb), route(i.rb, i.ra)];
     case 'EXCH': return [route(i.rd, i.rd)];
@@ -48,7 +51,7 @@ interface Props {
   regs: Uint16Array;
   hot: ReadonlySet<number>;
   /** The instruction that just ran (or was just undone), if any. */
-  instr: StrictInstr | null;
+  instr: Instr | null;
   /** Changes every step so the pulse animation restarts. */
   stepKey: string;
   direction: Direction;
@@ -93,9 +96,11 @@ export function ChipSvg({ variant, regs, hot, instr, stepKey, direction, heat = 
     return () => clearTimeout(t);
   }, [sparks]);
 
-  const shown = instr && (direction === 'backward' && !normal ? { ...instr, op: INVERSE_OP[instr.op] } as StrictInstr : instr);
-  const routes = instr ? routesFor(instr) : [];
+  const logged = instr !== null && !isStrictInstr(instr);
   const backward = direction === 'backward' && !normal;
+  // Rewinding a reversible instruction runs its opposite; a logged one is restored from the log.
+  const shownOp = !instr ? '—' : backward && !logged ? INVERSE_OP[(instr as StrictInstr).op] : instr.op;
+  const routes = instr ? routesFor(instr) : [];
 
   return (
     <svg className={`chip-svg ${variant}${dim ? ' dim' : ''}`} viewBox={`0 0 ${W} ${H}`} role="img"
@@ -168,20 +173,22 @@ export function ChipSvg({ variant, regs, hot, instr, stepKey, direction, heat = 
       {/* the moving data: route glow + travelling pulse */}
       {routes.map((d, i) => (
         <g key={`${stepKey}-${i}`}>
-          <path d={d} className="route" />
+          <path d={d} className={`route${logged ? ' logged' : ''}`} />
           <path d={d} pathLength={100} className={`pulse ${backward ? 'back' : 'fwd'}`} filter="url(#glow)" />
         </g>
       ))}
 
       {/* arithmetic unit */}
-      <g className={`alu${instr ? ' busy' : ''}`}>
+      <g className={`alu${instr ? ' busy' : ''}${logged ? ' logged' : ''}`}>
         <rect x={ALU.x} y={ALU.y} width={ALU.w} height={ALU.h} rx={9} />
         <text x={ALU.x + 10} y={ALU.y + 15} className="alu-label">ALU</text>
         <text x={ALU.x + ALU.w / 2} y={ALU.y + ALU.h / 2 + 9} className="alu-op" textAnchor="middle">
-          {shown ? shown.op : '—'}
+          {shownOp}
         </text>
-        {backward && instr && (
-          <text x={ALU.x + ALU.w / 2} y={ALU.y + ALU.h - 7} className="alu-sub" textAnchor="middle">undoing {instr.op}</text>
+        {instr && (backward || logged) && (
+          <text x={ALU.x + ALU.w / 2} y={ALU.y + ALU.h - 7} className="alu-sub" textAnchor="middle">
+            {logged ? (backward ? 'restored from log' : 'saved to log') : `undoing ${instr.op}`}
+          </text>
         )}
       </g>
 
@@ -213,8 +220,8 @@ export function ChipSvg({ variant, regs, hot, instr, stepKey, direction, heat = 
         </g>
       ) : (
         <g>
-          <text x={W - 34} y={H - 26} className="engrave" textAnchor="end">NO-DELETE 16 · REVERSIBLE</text>
-          <text x={ALU.x + ALU.w / 2} y={ALU.y + ALU.h + 28} className="zero-heat" textAnchor="middle">0 bits destroyed</text>
+          <text x={W - 34} y={H - 26} className="engrave" textAnchor="end">TENET · FLIP-16</text>
+          {!logged && <text x={ALU.x + ALU.w / 2} y={ALU.y + ALU.h + 28} className="zero-heat" textAnchor="middle">0 bits destroyed</text>}
         </g>
       )}
       {normal && <text x={W - 34} y={H - 26} className="engrave" textAnchor="end">ORDINARY CPU</text>}

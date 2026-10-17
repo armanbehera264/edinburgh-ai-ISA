@@ -1,4 +1,50 @@
-# Flip-16
+# TENET: a computer that runs in reverse
+
+> **Flip the Script (EdinburghAI hackathon, 17 Oct 2026)**
+>
+> **The assumption:** a computer only moves forwards. Every step overwrites and destroys old values, so there is no way back.
+>
+> **The flip:** every TENET instruction has an exact opposite. Nothing is ever destroyed, so any program can run backwards to its exact starting state, with **zero saved history**.
+
+Type a message, run the program forward and it scrambles. Drag the timeline back and the message comes back exactly. There is no decryption routine and no undo log: the machine executes each instruction's inverse using only its current registers and the program.
+
+Next to it, an ordinary CPU runs the same program. It overwrites registers (the bits-destroyed counter climbs) and when you try to rewind, it is stuck.
+
+**Why it matters:** physics puts a minimum energy cost on destroying information (Landauer's principle). A computer that never destroys anything is the route to near-zero-energy chips, and quantum computers already work this way.
+
+## Run it
+
+```bash
+npm install
+npm run dev      # http://127.0.0.1:5188
+npm test         # 23 tests: random instructions and programs all rewind exactly
+npm run build    # production build into dist/
+```
+
+- **Demo:** the message scrambler, with TENET and an ordinary CPU side by side on a 3D circuit board (drag to rotate, scroll to zoom; "Flat" switches to the 2D chip view).
+- **Playground:** write or pick any program and run it backwards. Switch to *Ordinary instructions (with undo log)* to see exactly how many bytes of history a normal instruction set needs to rewind, compared with 0 B for reversible instructions.
+- Keys: `space` play, `←/→` step, `shift+←` rewind, `I` look inside, `L` limits.
+
+## Tech stack
+
+- **TypeScript virtual machine** (`src/core`): the FLIP-16 ISA described below. Strict mode is fully reversible; hybrid mode adds ordinary instructions undone from an exact-byte undo log. Tested with **Vitest**.
+- **React + Motion**: interface and spring animations. **SVG** for the flat chip view.
+- **three.js via React Three Fiber + Drei**: the 3D circuit board (per-bit LEDs, trace pulses, heat sink and sparks on the ordinary CPU). Lazy-loaded; runs at 60 fps on a laptop.
+- **Vite** to build. Everything runs in the browser; there is no server.
+
+## Limits
+
+- This is a simulation on an ordinary laptop. It shows *logical* reversibility; the energy saving would need reversible (adiabatic) hardware.
+- The ordinary CPU is a model: the same program, charged 16 bits destroyed per register overwrite. Its heat gauge is illustrative, not a power measurement.
+- The message scrambler is a toy, not real encryption. Reversible programs use fixed-count loops (`REPEAT n`); data-dependent loops need hybrid mode and its undo log.
+
+## AI disclosure
+
+We used Claude Code (Anthropic) as a coding assistant while building this.
+
+---
+
+# The FLIP-16 instruction set
 
 Flip-16 is a 16-bit teaching processor that can run backward.
 
@@ -85,7 +131,7 @@ Use strict mode when you want:
 
 Hybrid mode accepts the strict instructions unchanged and adds explicitly logged instructions. Each logged instruction is marked in the assembled program and appends an undo record before it changes state.
 
-Select **Hybrid (with undo log)** in the editor, then use hybrid mode when you need:
+Select **Ordinary instructions (with undo log)** in the Playground, then use hybrid mode when you need:
 
 - Conventional register assignment and memory access
 - Lossy shifts or bitwise operations
@@ -93,36 +139,6 @@ Select **Hybrid (with undo log)** in the editor, then use hybrid mode when you n
 - More direct matrix, fixed-point, or neural-network experiments
 
 The logger is a stack. A forward logged instruction pushes one record; backward execution pops that exact record. Strict instructions push nothing.
-
-## Working with the demo
-
-1. Install dependencies once:
-
-   ```powershell
-   npm ci
-   ```
-
-2. Build the TypeScript:
-
-   ```powershell
-   npm run build
-   ```
-
-3. Copy the HTML template into the build output:
-
-   ```powershell
-   Copy-Item src/index.html dist/index.html -Force
-   ```
-
-4. Serve the built page from the project root:
-
-   ```powershell
-   npx --yes serve dist -l 3000
-   ```
-
-5. Open `http://localhost:3000`.
-
-Choose a demo, press **Compile**, and use Step forward or Step backward. The editor highlights the source line most recently executed; the State panel highlights the registers changed by that instruction.
 
 ## Writing a strict-mode program
 
@@ -172,7 +188,7 @@ Ordinary ReLU, quantisation, and right shifts are not reversible: they lose info
 - Hybrid-mode log use grows with destructive work and can contain sensitive old values.
 - I/O, reset, and interaction with the outside world are irreversible boundaries.
 - A logger makes destructive instructions undoable; it does not make those instructions intrinsically reversible.
-- The current UI’s energy comparison is a teaching estimate based on Landauer’s lower bound, not a power measurement.
+- The ordinary CPU's heat gauge is illustrative, not a power measurement.
 
 ## Documentation map
 

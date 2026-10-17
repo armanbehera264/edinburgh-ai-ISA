@@ -1,8 +1,12 @@
+import type { AssemblyMode } from '../core/index.js';
 import { FIB_SOURCE } from './fibonacci.js';
 
 export interface Preset {
   id: string;
   name: string;
+  mode: AssemblyMode;
+  /** One or two sentences: what it computes, from which inputs, and what rewinding it costs. */
+  description: string;
   /** Starting values for r0–r7. */
   regs: number[];
   source: string;
@@ -10,20 +14,55 @@ export interface Preset {
 
 export const PRESETS: Preset[] = [
   {
-    id: 'swap',
-    name: 'Swap without a spare register',
+    id: 'swap-ordinary',
+    name: 'Swap two numbers using a temporary (ordinary)',
+    mode: 'hybrid',
+    description: 'Swaps r1 = 12 and r2 = 34 the way every normal computer does: copying through r3 with four MOVs. Each MOV overwrites a value, so rewinding needs 32 bytes of undo log.',
     regs: [0, 12, 34, 0, 0, 0, 0, 0],
     source: [
-      '# A normal computer swaps two values via a temporary,',
-      '# overwriting it. Three XORs do it with nothing lost.',
+      '# How every normal computer swaps two values:',
+      '# copy through a temporary, overwriting as it goes.',
+      'MOV r3, r1     # temp = a   (r3 was overwritten)',
+      'MOV r1, r2     # a = b      (old a overwritten)',
+      'MOV r2, r3     # b = temp   (old b overwritten)',
+      'MOV r3, r0     # clear temp (old temp overwritten)',
+    ].join('\n'),
+  },
+  {
+    id: 'swap',
+    name: 'Swap two numbers with XOR (reversible)',
+    mode: 'strict',
+    description: 'Same swap of r1 = 12 and r2 = 34, done with three XORs. Each XOR is its own opposite, so nothing is overwritten and rewinding needs 0 bytes.',
+    regs: [0, 12, 34, 0, 0, 0, 0, 0],
+    source: [
+      '# Same result, nothing destroyed:',
+      '# three XORs, each its own opposite.',
       'XOR r1, r2',
       'XOR r2, r1',
       'XOR r1, r2',
     ].join('\n'),
   },
   {
+    id: 'loop',
+    name: 'Add 3, five times, with a loop (ordinary)',
+    mode: 'hybrid',
+    description: 'A real loop: r1 counts down from 5 while r2 grows by 3 each pass, ending at r2 = 15. The JNZ jump forgets where it came from, so each jump is logged (7 bytes each).',
+    regs: [0, 5, 0, 0, 0, 0, 0, 0],
+    source: [
+      '# A real loop: r2 += 3, five times.',
+      '# The jump forgets where it came from,',
+      '# so each one is saved to the log.',
+      'loop:',
+      '  ADDI r2, 3',
+      '  SUBI r1, 1',
+      '  JNZ  r1, loop',
+    ].join('\n'),
+  },
+  {
     id: 'times10',
-    name: 'Multiply by 10, then clean up',
+    name: 'Multiply by 10 and clean up (reversible)',
+    mode: 'strict',
+    description: 'Computes r3 = 10 × r1 (1234 → 12340) using scratch registers r4 and r5, then un-computes them back to 0. Nothing is left behind and nothing is logged.',
     regs: [0, 1234, 0, 0, 0, 0, 0, 0],
     source: [
       "# Bennett's trick: borrow scratch space, use it, give it back.",
@@ -44,37 +83,28 @@ export const PRESETS: Preset[] = [
     ].join('\n'),
   },
   {
+    id: 'mixed',
+    name: 'Copy, shift, store, load, AND (ordinary)',
+    mode: 'hybrid',
+    description: 'Mixes reversible steps (ADDI) with ordinary ones: MOV, SHL, STORE, LOAD, AND and SHR. Each ordinary step logs only what it destroyed; a shift saves just the bits it pushed out.',
+    regs: [0, 0, 0, 0, 0, 0, 0, 0],
+    source: [
+      '# Reversible steps are free; ordinary ones pay into the log.',
+      'ADDI  r1, 12',
+      'MOV   r2, r1',
+      'SHL   r2, 1',
+      'STORE [r0], r2',
+      'LOAD  r3, [r0]',
+      'AND   r3, r1',
+      'SHR   r3, 2',
+    ].join('\n'),
+  },
+  {
     id: 'fib',
-    name: 'Fibonacci up and back down',
+    name: 'Fibonacci from 0, 1 to 46,368 and back (reversible)',
+    mode: 'strict',
+    description: 'Steps r1, r2 through the Fibonacci sequence 23 times using only ADD and SWAP. Run it backwards and it un-counts all the way to 0, 1 without storing a single number.',
     regs: [0, 0, 1, 0, 0, 0, 0, 0],
     source: FIB_SOURCE,
-  },
-  {
-    id: 'mixer',
-    name: 'Hash mixer (looks random, isn’t lost)',
-    regs: [1, 2, 3, 4, 0, 0, 0, 0],
-    source: [
-      '# Stir four numbers until they look like noise.',
-      'REPEAT 6 {',
-      '  ADD  r0, r1',
-      '  ROL  r1, 7',
-      '  XOR  r1, r0',
-      '  ADD  r2, r3',
-      '  ROL  r3, 9',
-      '  XOR  r3, r2',
-      '  SWAP r0, r2',
-      '}',
-    ].join('\n'),
-  },
-  {
-    id: 'blank',
-    name: 'Blank: write your own',
-    regs: [0, 5, 7, 0, 0, 0, 0, 0],
-    source: [
-      '# Allowed: ADD SUB ADDI SUBI XOR XORI NOT NEG ROL ROR SWAP',
-      '#          CADD CSUB CSWAP  and  REPEAT n { ... }',
-      '# Not allowed: anything that destroys information.',
-      'ADD r1, r2',
-    ].join('\n'),
   },
 ];

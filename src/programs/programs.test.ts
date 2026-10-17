@@ -52,22 +52,36 @@ describe('fibonacci', () => {
 
 describe('playground presets', async () => {
   const { PRESETS } = await import('./presets.js');
-  const { newState } = await import('../core/index.js');
+  const core = await import('../core/index.js');
   for (const p of PRESETS) {
-    it(`"${p.name}" assembles and rewinds exactly`, () => {
-      const { program, errors } = assemble(p.source);
+    it(`"${p.name}" (${p.mode}) assembles and rewinds exactly`, () => {
+      const { program, errors } = assemble(p.source, { mode: p.mode });
       expect(errors).toEqual([]);
-      const start = newState();
+      const start = core.newHybridState();
       p.regs.forEach((v, r) => { start.regs[r] = v; });
-      const s = cloneState(start);
-      runForward(s, program);
-      runBackward(s, program);
+      const s = core.cloneHybridState(start);
+      core.runForwardHybrid(s, program);
+      if (p.mode === 'strict') expect(s.logBytesUsed).toBe(0);
+      else expect(s.logBytesUsed).toBeGreaterThan(0);
+      core.runBackwardHybrid(s, program);
       expect(statesEqual(s, start)).toBe(true);
     });
   }
+  it('both swaps give the same answer; only the ordinary one needs a log', () => {
+    const run = (id: string) => {
+      const p = PRESETS.find((x) => x.id === id)!;
+      const s = core.newHybridState();
+      p.regs.forEach((v, r) => { s.regs[r] = v; });
+      core.runForwardHybrid(s, assemble(p.source, { mode: p.mode }).program);
+      return { a: s.regs[1], b: s.regs[2], log: s.logBytesUsed };
+    };
+    expect(run('swap-ordinary')).toMatchObject({ a: 34, b: 12 });
+    expect(run('swap')).toEqual({ a: 34, b: 12, log: 0 });
+    expect(run('swap-ordinary').log).toBe(32);
+  });
   it('multiply-by-10 leaves the answer and clean scratch', () => {
     const p = PRESETS.find((x) => x.id === 'times10')!;
-    const s = newState();
+    const s = core.newState();
     s.regs[1] = 1234;
     runForward(s, assemble(p.source).program);
     expect([s.regs[3], s.regs[4], s.regs[5]]).toEqual([12340, 0, 0]);
