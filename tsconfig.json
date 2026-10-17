@@ -1,16 +1,19 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "outDir": "dist",
-    "rootDir": "src",
+    "jsx": "react-jsx",
     "strict": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "sourceMap": true
+    "types": ["node", "vite/client"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src", "server", "vite.config.ts", "scripts"]
 }

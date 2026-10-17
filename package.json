@@ -1,13 +1,33 @@
 {
-  "name": "flip-16",
-  "version": "0.1.0",
+  "name": "no-delete",
+  "version": "0.2.0",
   "private": true,
-  "description": "Flip-16: a reversible 16-bit instruction-set architecture emulator",
+  "type": "module",
+  "description": "No Delete: a reversible 16-bit computer that runs any program backwards with zero stored history",
   "scripts": {
-    "build": "tsc",
-    "start": "npx serve dist"
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.7.9",
+    "@react-three/fiber": "^9.8.1",
+    "motion": "^14.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "three": "^0.186.1"
   },
   "devDependencies": {
-    "typescript": "^5.6.0"
+    "@anthropic-ai/sdk": "^0.135.0",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/three": "^0.186.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
   }
 }

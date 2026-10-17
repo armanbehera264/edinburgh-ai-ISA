@@ -73,6 +73,9 @@ export function applyOp(state: State, instr: InstrBody): void {
     case 'XOR':
       state.regs[instr.rd] = state.regs[instr.rd] ^ state.regs[instr.rs];
       break;
+    case 'XORI':
+      state.regs[instr.rd] = state.regs[instr.rd] ^ instr.imm;
+      break;
     case 'NOT':
       state.regs[instr.rd] = bitNot(state.regs[instr.rd]);
       break;

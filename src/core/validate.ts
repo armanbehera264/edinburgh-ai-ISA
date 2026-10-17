@@ -10,7 +10,7 @@ export function formatInstr(i: InstrBody): string {
   const rdOf = (x: InstrBody): number | null => {
     switch (x.op) {
       case 'ADD': case 'SUB': case 'XOR': return x.rd;
-      case 'ADDI': case 'SUBI': return x.rd;
+      case 'ADDI': case 'SUBI': case 'XORI': return x.rd;
       case 'NOT': case 'NEG': return x.rd;
       case 'ROL': case 'ROR': return x.rd;
       case 'EXCH': return x.rd;
@@ -21,7 +21,7 @@ export function formatInstr(i: InstrBody): string {
   const srcs = (x: InstrBody): number[] => {
     switch (x.op) {
       case 'ADD': case 'SUB': case 'XOR': return [x.rs];
-      case 'ADDI': case 'SUBI': return [];
+      case 'ADDI': case 'SUBI': case 'XORI': return [];
       case 'NOT': case 'NEG': return [];
       case 'ROL': case 'ROR': return [];
       case 'SWAP': return [x.ra, x.rb];
@@ -35,7 +35,7 @@ export function formatInstr(i: InstrBody): string {
   switch (i.op) {
     case 'ADD': case 'SUB': case 'XOR':
       return `${i.op} ${regName(i.rd)}, ${regName(i.rs)}`;
-    case 'ADDI': case 'SUBI':
+    case 'ADDI': case 'SUBI': case 'XORI':
       return `${i.op} ${regName(i.rd)}, ${i.imm}`;
     case 'NOT': case 'NEG':
       return `${i.op} ${regName(i.rd)}`;

@@ -14,7 +14,7 @@ export type Instr = InstrBody;
 export type Op =
   | 'ADD' | 'SUB'
   | 'ADDI' | 'SUBI'
-  | 'XOR'
+  | 'XOR' | 'XORI'
   | 'NOT' | 'NEG'
   | 'ROL' | 'ROR'
   | 'SWAP'
@@ -26,7 +26,7 @@ export type Op =
 export const INVERSE_OP: Record<Op, Op> = {
   ADD: 'SUB', SUB: 'ADD',
   ADDI: 'SUBI', SUBI: 'ADDI',
-  XOR: 'XOR',
+  XOR: 'XOR', XORI: 'XORI',
   NOT: 'NOT', NEG: 'NEG',
   ROL: 'ROR', ROR: 'ROL',
   SWAP: 'SWAP',
@@ -44,6 +44,7 @@ export interface InstrSUB { readonly op: 'SUB'; readonly rd: Reg; readonly rs: R
 export interface InstrADDI { readonly op: 'ADDI'; readonly rd: Reg; readonly imm: Word; }
 export interface InstrSUBI { readonly op: 'SUBI'; readonly rd: Reg; readonly imm: Word; }
 export interface InstrXOR { readonly op: 'XOR'; readonly rd: Reg; readonly rs: Reg; }
+export interface InstrXORI { readonly op: 'XORI'; readonly rd: Reg; readonly imm: Word; }
 export interface InstrNOT { readonly op: 'NOT'; readonly rd: Reg; }
 export interface InstrNEG { readonly op: 'NEG'; readonly rd: Reg; }
 export interface InstrROL { readonly op: 'ROL'; readonly rd: Reg; readonly amount: number; }
@@ -55,7 +56,7 @@ export interface InstrCSUB { readonly op: 'CSUB'; readonly rd: Reg; readonly rs:
 export interface InstrCSWAP { readonly op: 'CSWAP'; readonly ra: Reg; readonly rb: Reg; readonly rc: Reg; }
 
 export type InstrBody =
-  | InstrADD | InstrSUB | InstrADDI | InstrSUBI | InstrXOR
+  | InstrADD | InstrSUB | InstrADDI | InstrSUBI | InstrXOR | InstrXORI
   | InstrNOT | InstrNEG | InstrROL | InstrROR
   | InstrSWAP | InstrEXCH
   | InstrCADD | InstrCSUB | InstrCSWAP;
@@ -63,7 +64,7 @@ export type InstrBody =
 export function rdOf(i: InstrBody): Reg | null {
   switch (i.op) {
     case 'ADD': case 'SUB': case 'XOR': return i.rd;
-    case 'ADDI': case 'SUBI': return i.rd;
+    case 'ADDI': case 'SUBI': case 'XORI': return i.rd;
     case 'NOT': case 'NEG': return i.rd;
     case 'ROL': case 'ROR': return i.rd;
     case 'EXCH': return i.rd;
@@ -76,7 +77,7 @@ export function rdOf(i: InstrBody): Reg | null {
 export function srcRegsOf(i: InstrBody): Reg[] {
   switch (i.op) {
     case 'ADD': case 'SUB': case 'XOR': return [i.rs];
-    case 'ADDI': case 'SUBI': return [];
+    case 'ADDI': case 'SUBI': case 'XORI': return [];
     case 'NOT': case 'NEG': return [];
     case 'ROL': case 'ROR': return [];
     case 'SWAP': return [i.ra, i.rb];
@@ -89,7 +90,7 @@ export function srcRegsOf(i: InstrBody): Reg[] {
 
 export function immOf(i: InstrBody): Word | null {
   switch (i.op) {
-    case 'ADDI': case 'SUBI': return i.imm;
+    case 'ADDI': case 'SUBI': case 'XORI': return i.imm;
     default: return null;
   }
 }
@@ -108,6 +109,7 @@ export function toString(i: InstrBody): string {
     case 'ADDI': return `ADDI ${regName(i.rd)}, ${i.imm}`;
     case 'SUBI': return `SUBI ${regName(i.rd)}, ${i.imm}`;
     case 'XOR': return `XOR ${regName(i.rd)}, ${regName(i.rs)}`;
+    case 'XORI': return `XORI ${regName(i.rd)}, 0x${i.imm.toString(16).padStart(4, '0')}`;
     case 'NOT': return `NOT ${regName(i.rd)}`;
     case 'NEG': return `NEG ${regName(i.rd)}`;
     case 'ROL': return `ROL ${regName(i.rd)}, ${i.amount}`;

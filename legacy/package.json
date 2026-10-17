@@ -1,0 +1,13 @@
+{
+  "name": "flip-16",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Flip-16: a reversible 16-bit instruction-set architecture emulator",
+  "scripts": {
+    "build": "tsc",
+    "start": "npx serve dist"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

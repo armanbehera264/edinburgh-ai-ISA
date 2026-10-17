@@ -203,7 +203,7 @@ function parseLine(
         if (rs.error) return fail(rs.error);
         return { instr: { op, rd: rd.reg, rs: rs.reg } as InstrBody, error: null };
       }
-      case 'ADDI': case 'SUBI': {
+      case 'ADDI': case 'SUBI': case 'XORI': {
         if (args.length !== 2) return fail(`${op} needs a register and an immediate`);
         const rd = parseReg(args[0]);
         const imm = parseImm(args[1]);
