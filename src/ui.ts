@@ -1,19 +1,17 @@
 import {
   assemble, AsmResult, Instr,
   stepForward, stepBackward, runForward, runBackward,
-  makeInverseProgram, newState, cloneState, statesEqual,
+  newState,
   Word, add,
   BaselineState, newBaselineState, cloneBaseline, stepForwardBaseline,
   runForwardBaseline,
-  gateXOR, gateNOT, gateSWAP, gateADD, gateCADD,
-  toString,
 } from './index.js';
 
 /* ---------- DOM elements ---------- */
 const asmEl = document.getElementById('asm') as HTMLTextAreaElement;
+const executionMarkerEl = document.getElementById('execution-marker') as HTMLDivElement;
 const demoSelectEl = document.getElementById('demo-select') as HTMLSelectElement;
 const demoNoteEl = document.getElementById('demo-note') as HTMLDivElement;
-const progEl = document.getElementById('prog') as HTMLDivElement;
 const asmErrorsEl = document.getElementById('asm-errors') as HTMLDivElement;
 
 const regsBodyEl = document.getElementById('regs-body') as HTMLTableSectionElement;
@@ -21,7 +19,7 @@ const pcEl = document.getElementById('pc') as HTMLSpanElement;
 const pcNEl = document.getElementById('pcN') as HTMLSpanElement;
 const dirEl = document.getElementById('dir') as HTMLSpanElement;
 
-const btnReset = document.getElementById('btn-reset') as HTMLButtonElement;
+const btnCompile = document.getElementById('btn-compile') as HTMLButtonElement;
 const btnStepFwd = document.getElementById('btn-step-fwd') as HTMLButtonElement;
 const btnStepBwd = document.getElementById('btn-step-bwd') as HTMLButtonElement;
 const btnRunFwd = document.getElementById('btn-run-fwd') as HTMLButtonElement;
@@ -35,20 +33,6 @@ const energyStepsEl = document.getElementById('energy-steps') as HTMLSpanElement
 const erasedEl = document.getElementById('erased') as HTMLSpanElement;
 const energyEl = document.getElementById('energy') as HTMLSpanElement;
 
-const selInstrEl = document.getElementById('sel-instr') as HTMLDivElement;
-const selInverseEl = document.getElementById('sel-inverse') as HTMLDivElement;
-const valStatusEl = document.getElementById('val-status') as HTMLSpanElement;
-const valDetailEl = document.getElementById('val-detail') as HTMLDivElement;
-const btnRoundtrip = document.getElementById('btn-roundtrip') as HTMLButtonElement;
-const rtResultEl = document.getElementById('rt-result') as HTMLDivElement;
-
-const gNotEl = document.getElementById('g-not') as HTMLSpanElement;
-const gCnotEl = document.getElementById('g-cnot') as HTMLSpanElement;
-const gToffoliEl = document.getElementById('g-toffoli') as HTMLSpanElement;
-const gFredkinEl = document.getElementById('g-fredkin') as HTMLSpanElement;
-const gAncillaEl = document.getElementById('g-ancilla') as HTMLSpanElement;
-const gNoteEl = document.getElementById('g-note') as HTMLDivElement;
-
 /* ---------- Application state ---------- */
 type DemoId = 'fibonacci' | 'copy' | 'custom';
 
@@ -60,7 +44,7 @@ type Demo = {
 
 const DEMOS: Record<Exclude<DemoId, 'custom'>, Demo> = {
   fibonacci: {
-    source: `; Seed: r1 = 0, r2 = 1. Each pair is (F(n), F(n+1)).
+    source: `# Seed: r1 = 0, r2 = 1. Each pair is (F(n), F(n+1)).
 REPEAT 8 {
   ADD  r1, r2
   SWAP r1, r2
@@ -74,7 +58,7 @@ REPEAT 8 {
     },
   },
   copy: {
-    source: `; Seed: r1 = 42, r2 = 0. Copy into clean storage, then erase the copy.
+    source: `# Seed: r1 = 42, r2 = 0. Copy into clean storage, then erase the copy.
 XOR r2, r1
 XOR r2, r1`,
     note: 'Starts at r1 = 42 and r2 = 0. The first XOR creates a reversible copy; the second uncomputes it back to zero.',
@@ -88,6 +72,8 @@ XOR r2, r1`,
 
 let activeDemo: DemoId = 'fibonacci';
 let program: Instr[] = [];
+let programSourceLines: number[] = [];
+let activeSourceLine: number | null = null;
 let state = initialState();
 let baseline = newBaselineState();
 let steps = 0;
@@ -101,7 +87,6 @@ function init(): void {
   renderState();
   renderTimeline();
   updateEnergy();
-  updateGateDisplay(null);
 
   asmEl.addEventListener('input', () => {
     activeDemo = 'custom';
@@ -110,7 +95,6 @@ function init(): void {
     resetMachine();
     assembleAndRender();
     updateEnergy();
-    updateGateDisplay(null);
   });
 
   demoSelectEl.addEventListener('change', () => {
@@ -127,16 +111,14 @@ function init(): void {
     resetMachine();
     assembleAndRender();
     updateEnergy();
-    updateGateDisplay(null);
   });
 
-  btnReset.addEventListener('click', () => {
+  btnCompile.addEventListener('click', () => {
     resetMachine();
     assembleAndRender();
     renderState();
     renderTimeline();
     updateEnergy();
-    updateGateDisplay(null);
   });
 
   btnStepFwd.addEventListener('click', () => stepOne('forward'));
@@ -147,8 +129,7 @@ function init(): void {
   // `input` fires for mouse drag, keyboard arrows, and touch interaction.
   // Replaying from the entry state makes every selected PC boundary deterministic.
   scrubEl.addEventListener('input', applyScrub);
-
-  btnRoundtrip.addEventListener('click', () => runRoundtripTest());
+  asmEl.addEventListener('scroll', renderExecutionMarker);
 
 }
 
@@ -163,6 +144,7 @@ function resetMachine(): void {
   steps = 0;
   direction = 'forward';
   changedRegisters.clear();
+  activeSourceLine = null;
 }
 
 function markChangedRegisters(before: Uint16Array): void {
@@ -176,20 +158,8 @@ function markChangedRegisters(before: Uint16Array): void {
 function assembleAndRender(): void {
   const result: AsmResult = assemble(asmEl.value);
   program = result.program;
-
-  // Render program listing
-  progEl.innerHTML = '';
+  programSourceLines = result.sourceLines;
   const errors: string[] = [];
-  for (let i = 0; i < program.length; i++) {
-    const line = document.createElement('div');
-    line.className = 'line';
-    line.innerHTML = `
-      <div class="idx">${i}</div>
-      <div><span class="op">${program[i].op}</span> ${renderOperands(program[i])}</div>
-    `;
-    progEl.appendChild(line);
-  }
-
   // Show assembler errors
   asmErrorsEl.innerHTML = '';
   if (result.errors.length) {
@@ -209,45 +179,23 @@ function assembleAndRender(): void {
   renderTimeline();
 }
 
-function renderOperands(instr: Instr): string {
-  switch (instr.op) {
-    case 'ADD': case 'SUB': case 'XOR':
-      return `r${instr.rd}, r${instr.rs}`;
-    case 'ADDI': case 'SUBI':
-      return `r${instr.rd}, ${instr.imm}`;
-    case 'NOT': case 'NEG':
-      return `r${instr.rd}`;
-    case 'ROL': case 'ROR':
-      return `r${instr.rd}, ${instr.amount}`;
-    case 'SWAP':
-      return `r${instr.ra}, r${instr.rb}`;
-    case 'EXCH':
-      return `r${instr.rd}, [r${instr.ra}]`;
-    case 'CADD': case 'CSUB':
-      return `r${instr.rd}, r${instr.rs}, r${instr.rc}`;
-    case 'CSWAP':
-      return `r${instr.ra}, r${instr.rb}, r${instr.rc}`;
-    default:
-      return '';
-  }
-}
-
 /* ---------- Core stepping ---------- */
 function stepOne(dir: 'forward' | 'backward'): void {
   if (program.length === 0) return;
   try {
     const before = new Uint16Array(state.regs);
+    const executedIndex = dir === 'forward' ? state.pc : state.pc - 1;
     if (dir === 'forward') {
       stepForward(state, program);
     } else {
       stepBackward(state, program);
     }
     markChangedRegisters(before);
+    activeSourceLine = programSourceLines[executedIndex] ?? null;
     steps += 1;
     direction = dir;
     renderState();
     renderTimeline();
-    updateGateDisplay(getCurrentInstr());
     updateEnergy();
   } catch (e) {
     // Boundary error — just update display, don't crash.
@@ -265,11 +213,13 @@ function run(dir: 'forward' | 'backward'): void {
       runBackward(state, program);
     }
     markChangedRegisters(before);
+    activeSourceLine = dir === 'forward'
+      ? (programSourceLines[program.length - 1] ?? null)
+      : (programSourceLines[0] ?? null);
     direction = dir;
     steps = 0; // steps not meaningful for a full run in this simple counter
     renderState();
     renderTimeline();
-    updateGateDisplay(null);
     updateEnergy();
   } catch (e) {
     renderTimeline();
@@ -285,24 +235,20 @@ function applyScrub(): void {
   steps = target;
   direction = 'forward';
   changedRegisters.clear();
+  activeSourceLine = null;
   try {
     for (let i = 0; i < target && i < program.length; i++) {
       const before = new Uint16Array(state.regs);
       stepForward(state, program);
       markChangedRegisters(before);
+      activeSourceLine = programSourceLines[i] ?? null;
     }
   } catch (e) {
     // ignore boundary
   }
   renderState();
   renderTimeline();
-  updateGateDisplay(getCurrentInstr());
   updateEnergy();
-}
-
-function getCurrentInstr(): Instr | null {
-  if (state.pc < 0 || state.pc >= program.length) return null;
-  return program[state.pc];
 }
 
 /* ---------- Rendering ---------- */
@@ -325,11 +271,22 @@ function renderState(): void {
   pcNEl.textContent = String(program.length);
   dirEl.textContent = direction;
 
-  // Highlight current instruction line
-  const lines = progEl.querySelectorAll('.line');
-  lines.forEach((el, i) => {
-    el.classList.toggle('current', i === state.pc);
-  });
+  renderExecutionMarker();
+}
+
+function renderExecutionMarker(): void {
+  if (activeSourceLine === null) {
+    executionMarkerEl.style.display = 'none';
+    return;
+  }
+
+  const styles = getComputedStyle(asmEl);
+  const lineHeight = Number.parseFloat(styles.lineHeight);
+  const paddingTop = Number.parseFloat(styles.paddingTop);
+  const lineIndex = activeSourceLine - 1;
+  executionMarkerEl.style.top = `${paddingTop + lineIndex * lineHeight - asmEl.scrollTop}px`;
+  executionMarkerEl.style.height = `${lineHeight}px`;
+  executionMarkerEl.style.display = 'block';
 }
 
 function renderTimeline(): void {
@@ -340,93 +297,6 @@ function renderTimeline(): void {
   scrubEl.max = String(progLen);
   scrubEl.value = String(state.pc);
   scrubValEl.textContent = String(state.pc);
-}
-
-function updateGateDisplay(instr: Instr | null): void {
-  if (!instr) {
-    gNotEl.textContent = '—';
-    gCnotEl.textContent = '—';
-    gToffoliEl.textContent = '—';
-    gFredkinEl.textContent = '—';
-    gAncillaEl.textContent = 'garbage ancillas: —';
-    gAncillaEl.className = 'badge';
-    gNoteEl.textContent = 'No operation selected.';
-    return;
-  }
-
-  let not = 0, cnot = 0, toffoli = 0, fredkin = 0;
-  let ancillaDirty = false;
-  let note = '';
-
-  switch (instr.op) {
-    case 'XOR': {
-      const r = gateXOR(Number(instr.rd), Number(instr.rs));
-      not = r.stats.not; cnot = r.stats.cnot;
-      toffoli = r.stats.toffoli; fredkin = r.stats.fredkin;
-      ancillaDirty = false;
-      note = '16 parallel CNOTs: rs[i] → rd[i].';
-      break;
-    }
-    case 'NOT': {
-      const r = gateNOT(Number(instr.rd));
-      not = r.stats.not;
-      note = '16 NOT gates.';
-      break;
-    }
-    case 'SWAP': {
-      const r = gateSWAP(0, 0);
-      cnot = r.stats.cnot * 3; // 3 CNOTs per bit × 16 bits
-      note = '3 CNOTs per bit (a^=b; b^=a; a^=b).';
-      break;
-    }
-    case 'ADD': case 'SUB': case 'ADDI': case 'SUBI': {
-      const r = gateADD(0, 0);
-      toffoli = r.stats.toffoli;
-      ancillaDirty = r.ancillaDirty;
-      note = 'Cuccaro ripple-carry adder; ancilla carry returns to 0.';
-      break;
-    }
-    case 'CADD': case 'CSUB': {
-      const r = gateCADD(0, 0, 0);
-      toffoli = r.stats.toffoli;
-      ancillaDirty = r.ancillaDirty;
-      note = 'Compute–use–uncompute: controlled copy, add, uncompute.';
-      break;
-    }
-    default:
-      note = 'No gate-level mapping required (wiring or N/A).';
-  }
-
-  gNotEl.textContent = String(not);
-  gCnotEl.textContent = String(cnot);
-  gToffoliEl.textContent = String(toffoli);
-  gFredkinEl.textContent = String(fredkin);
-  const badge = ancillaDirty ? 'badge bad' : 'badge ok';
-  gAncillaEl.className = badge;
-  gAncillaEl.textContent = ancillaDirty
-    ? 'garbage ancillas: DIRTY'
-    : 'garbage ancillas: 0';
-  gNoteEl.textContent = note;
-}
-
-/* ---------- Reversibility / round-trip test ---------- */
-function runRoundtripTest(): void {
-  const current = cloneState(state);
-  const prog = program;
-  try {
-    // Forward to end
-    const fwd = runForward(cloneState(current), prog);
-    // Backward all the way
-    const back = runBackward(fwd, prog);
-    const ok = statesEqual(back, current);
-    rtResultEl.textContent = ok
-      ? `PASS: forward to pc=N then backward to pc=0 restored the initial state byte-for-byte.`
-      : 'FAIL: round-trip did not restore state.';
-    rtResultEl.style.color = ok ? 'var(--ok)' : 'var(--bad)';
-  } catch (e) {
-    rtResultEl.textContent = `Test error: ${String(e)}`;
-    rtResultEl.style.color = 'var(--bad)';
-  }
 }
 
 function updateEnergy(): void {

@@ -5,12 +5,12 @@
 Flip-16 is a straight-line reversible assembly language. Write one instruction per line. Instruction and register names are case-insensitive; the formatter displays them in uppercase/lowercase canonical form.
 
 ```asm
-; This is a comment.
-ADD r2, r1       // This is also a comment.
+# This is a comment.
+ADD r2, r1       # This is also a comment.
 ROL r2, 3
 ```
 
-- Comments begin with `;` or `//` and continue to the end of the line.
+- Comments begin with `#` and continue to the end of the line.
 - Operands are separated with commas.
 - Whitespace around an opcode, operands, commas, and braces is allowed.
 - Blank lines are ignored.
@@ -82,7 +82,7 @@ EXCH r3, [r4]
 The condition register is read but never modified:
 
 ```asm
-CADD r0, r1, r2  ; Add r1 into r0 only when r2 is non-zero.
+CADD r0, r1, r2  # Add r1 into r0 only when r2 is non-zero.
 ```
 
 ## Common assembler errors

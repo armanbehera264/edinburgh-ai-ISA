@@ -24,7 +24,3 @@ export {
   BaselineState, newBaselineState, cloneBaseline, stepForwardBaseline,
   runForwardBaseline, stepBackwardBaseline, LogEntry,
 } from './core/baseline.js';
-export {
-  Bit, GateStats, gateXOR, gateNOT, gateSWAP, gateADD, gateCADD,
-  bitOf, wordFromBits,
-} from './gate/gates.js';

@@ -6,5 +6,4 @@ export { validateInstr, validateProgram, validateDefensive, } from './core/valid
 export { stepForward, stepBackward, applyForward, applyOp, runForward, runBackward, makeInverseProgram, executeForward, executeBackward, ExecutionError, ERR_AT_END, ERR_AT_START, } from './core/eval.js';
 export { assemble } from './core/assemble.js';
 export { newBaselineState, cloneBaseline, stepForwardBaseline, runForwardBaseline, stepBackwardBaseline, } from './core/baseline.js';
-export { gateXOR, gateNOT, gateSWAP, gateADD, gateCADD, bitOf, wordFromBits, } from './gate/gates.js';
 //# sourceMappingURL=index.js.map

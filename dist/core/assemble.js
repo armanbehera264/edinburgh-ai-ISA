@@ -1,5 +1,10 @@
 import { toWord, MAX_WORD } from './word.js';
 import { validateInstr } from './validate.js';
+/** Remove the assembly-language comment suffix from a source line. */
+function stripComment(text) {
+    const hash = text.indexOf('#');
+    return hash === -1 ? text : text.slice(0, hash);
+}
 /** Parse a single immediate value. Accepts decimal, hex (0x...), or signed decimal. */
 function parseImm(text) {
     const t = text.trim();
@@ -54,7 +59,7 @@ export function assemble(source, options = {}) {
     while (i < rawLines.length) {
         const line = rawLines[i];
         const lineNo = i + 1;
-        const trimmed = line.trim();
+        const trimmed = stripComment(line).trim();
         const repeatM = /^REPEAT\s+(\d+)\s*\{\s*$/i.exec(trimmed);
         if (repeatM) {
             const count = Number(repeatM[1]);
@@ -64,7 +69,7 @@ export function assemble(source, options = {}) {
             while (i < rawLines.length && depth > 0) {
                 const inner = rawLines[i];
                 const innerNo = i + 1;
-                const innerTrimmed = inner.trim();
+                const innerTrimmed = stripComment(inner).trim();
                 if (/^REPEAT\s+\d+\s*\{\s*$/i.test(innerTrimmed)) {
                     depth += 1;
                     block.push({ text: inner, line: innerNo });
@@ -106,6 +111,7 @@ export function assemble(source, options = {}) {
     }
     // Second pass: parse each expanded line into an instruction.
     const program = [];
+    const sourceLines = [];
     for (const item of expanded) {
         const parsed = parseLine(item.text, item.line, options.contracts);
         if (parsed.error) {
@@ -125,6 +131,7 @@ export function assemble(source, options = {}) {
             continue;
         }
         program.push(instr);
+        sourceLines.push(item.line);
     }
     if (program.length > maxProgramLength) {
         errors.push({
@@ -135,21 +142,14 @@ export function assemble(source, options = {}) {
     }
     return {
         program,
+        sourceLines,
         errors: errors,
         expandedLength: program.length,
     };
 }
 function parseLine(text, line, contracts) {
-    // Strip comments (; or //).
-    let body = text;
-    const semi = body.indexOf(';');
-    const dslash = body.indexOf('//');
-    let cut = body.length;
-    if (semi !== -1)
-        cut = Math.min(cut, semi);
-    if (dslash !== -1)
-        cut = Math.min(cut, dslash);
-    body = body.slice(0, cut).trim();
+    // Assembly comments begin with `#` and continue to the end of the line.
+    const body = stripComment(text).trim();
     if (body === '')
         return { instr: null, error: null };
     const opMatch = /^(\S+)(?:\s+(.*))?$/.exec(body);

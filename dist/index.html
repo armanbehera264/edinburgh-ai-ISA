@@ -34,10 +34,10 @@
       padding: 0.75rem 1.5rem; font-size: 0.78rem; color: var(--muted); }
 
     .content-column, .sidebar { min-width: 0; }
-    .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
+    .timeline-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
     @media (max-width: 900px) {
       main { grid-template-columns: 1fr; }
-      .grid3 { grid-template-columns: 1fr; }
+      .timeline-grid { grid-template-columns: 1fr; }
     }
 
     .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 0.5rem;
@@ -60,8 +60,6 @@
     button:disabled { opacity: 0.45; cursor: not-allowed; border-color: var(--border); }
     button.primary { background: var(--accent); color: #021622; border-color: var(--accent); font-weight: 600; }
     button.primary:hover { background: #7dd3fc; }
-    button.danger { background: #7f1d1d; border-color: #7f1d1d; color: #fee2e2; }
-    button.danger:hover { background: #991b1b; }
     .toolbar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 0.75rem; }
 
     /* Register watch table */
@@ -78,16 +76,11 @@
     .pc-line { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; font-size: 0.82rem; color: var(--muted); }
     .pc-line b { color: var(--text); }
 
-    /* Program listing */
-    .prog { border: 1px solid var(--border); border-radius: 0.35rem; background: #090d15; }
-    .prog .line { display: grid; grid-template-columns: 2.2rem 1fr; padding: 0.35rem 0.6rem;
-      border-bottom: 1px solid var(--border); font-family: ui-monospace, monospace; font-size: 0.82rem; }
-    .prog .line:last-child { border-bottom: none; }
-    .prog .line .idx { color: var(--muted); text-align: right; padding-right: 0.5rem; }
-    .prog .line.current { background: rgba(56, 189, 248, 0.12); border-left: 3px solid var(--accent); }
-    .prog .line.current .idx { color: var(--accent); font-weight: 700; }
-    .prog .line .op { color: var(--accent-2); margin-right: 0.5rem; }
-    .prog .line .err { color: var(--bad); font-size: 0.72rem; margin-left: 0.6rem; }
+    /* Source editor with a non-interactive marker behind the active line. */
+    .editor-wrap { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 0.35rem; background: #0b1018; }
+    .editor-wrap textarea { position: relative; z-index: 1; margin: 0; border: 0; border-radius: 0; background: transparent; line-height: 1.5; }
+    .execution-marker { position: absolute; z-index: 0; left: 0; right: 0; height: 1.5em; display: none;
+      background: rgba(251, 191, 36, 0.16); border-left: 3px solid var(--pc); pointer-events: none; }
 
     /* Timeline */
     .timeline { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
@@ -115,7 +108,7 @@
     <span class="tag">No undo log</span>
   </div>
   <div class="toolbar" aria-label="Execution controls" style="margin:0 0 0 auto;">
-    <button id="btn-reset" class="danger">Reset</button>
+    <button id="btn-compile" class="primary">Compile</button>
     <button id="btn-step-bwd">Step backward</button>
     <button id="btn-step-fwd">Step forward</button>
     <button id="btn-run-bwd">Run backward</button>
@@ -135,19 +128,21 @@
           <option value="custom">Custom program</option>
         </select>
       </div>
-      <textarea id="asm" spellcheck="false">; Seed: r1 = 0, r2 = 1. Each pair is (F(n), F(n+1)).
+      <div class="editor-wrap">
+        <div id="execution-marker" class="execution-marker" aria-hidden="true"></div>
+        <textarea id="asm" spellcheck="false"># Seed: r1 = 0, r2 = 1. Each pair is (F(n), F(n+1)).
 REPEAT 8 {
   ADD  r1, r2
   SWAP r1, r2
 }</textarea>
+      </div>
       <div id="demo-note" style="margin-top:0.45rem;font-size:0.78rem;color:var(--muted);">
         Starts at r1 = 0 and r2 = 1. Step forward to watch consecutive Fibonacci values move through r1 and r2.
       </div>
-      <div class="prog" id="prog"></div>
       <div id="asm-errors" class="errors"></div>
     </div>
 
-    <div class="grid3">
+    <div class="timeline-grid">
     <div class="card">
       <h2><span class="dot"></span>Timeline</h2>
       <div style="display:flex;gap:0.5rem;align-items:center;">
@@ -163,36 +158,6 @@ REPEAT 8 {
         <span>Log memory (baseline): <b id="logbytes">0</b> bytes</span>
         <span>Flip-16 log: <b id="flip16log">0</b> bytes</span>
       </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="dot"></span>Reversibility</h2>
-      <div id="sel-instr" style="font-family:ui-monospace,monospace;font-size:0.9rem;margin-bottom:0.4rem;">—</div>
-      <div id="sel-inverse" style="font-family:ui-monospace,monospace;font-size:0.9rem;color:var(--accent-2);margin-bottom:0.6rem;">inverse: —</div>
-      <div>Validation: <span id="val-status" class="badge ok">ready</span></div>
-      <div id="val-detail" style="font-size:0.78rem;color:var(--muted);margin-top:0.3rem;"></div>
-      <div style="margin-top:0.6rem;">
-        <div style="font-size:0.72rem;color:var(--muted);margin-bottom:0.25rem;">Round-trip property:</div>
-        <button id="btn-roundtrip">Test backward(forward(S)) == S</button>
-        <div id="rt-result" style="margin-top:0.35rem;font-size:0.78rem;color:var(--muted);"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2><span class="dot"></span>Circuit (gate model)</h2>
-      <div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem;">
-        Selected operation gate count / ancilla cleanliness.
-      </div>
-      <div class="status-row" style="font-size:0.78rem;">
-        <span>NOT: <b id="g-not">0</b></span>
-        <span>CNOT: <b id="g-cnot">0</b></span>
-        <span>Toffoli: <b id="g-toffoli">0</b></span>
-        <span>Fredkin: <b id="g-fredkin">0</b></span>
-      </div>
-      <div style="margin-top:0.4rem;">
-        <span class="badge" id="g-ancilla" class="ok">garbage ancillas: 0</span>
-      </div>
-      <div style="margin-top:0.5rem;font-size:0.78rem;color:var(--muted);" id="g-note"></div>
     </div>
 
     </div>
